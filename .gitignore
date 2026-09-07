@@ -14,3 +14,6 @@ v2/dist*/
 Thumbs.db
 desktop.ini
 *.log
+
+# Local Claude Code settings, not project config.
+.claude/settings.local.json
