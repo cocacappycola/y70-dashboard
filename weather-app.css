@@ -1,0 +1,268 @@
+/* ===========================================================================
+   Y70 Weather app — reactive background, AQI, radar map with overlays.
+   =========================================================================== */
+
+:root {
+  --ink: var(--w-text, #f2f6fa);
+  --sub: var(--w-sub, #9fb3c8);
+  --muted: var(--w-muted, #6b8299);
+  --card: var(--w-card, rgba(255, 255, 255, .055));
+  --card-line: var(--w-card-line, rgba(255, 255, 255, .09));
+  --accent: var(--w-accent, #6cb6ff);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--w-bg, #06080d);
+  color: var(--ink);
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  overflow: hidden; user-select: none;
+}
+.hidden { display: none !important; }
+.spacer { flex: 1; }
+
+/* ---------- Reactive background ---------- */
+#bg-canvas {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  z-index: 0; display: block;
+}
+#bg-tint {
+  position: fixed; inset: 0; z-index: 1; pointer-events: none;
+  transition: background 1.5s ease;
+}
+
+#app { position: relative; z-index: 2; height: 100%; display: flex; flex-direction: column; }
+
+/* ---------- Header ---------- */
+#top {
+  flex-shrink: 0; display: flex; align-items: center; gap: 12px;
+  padding: 14px 18px 8px;
+}
+.place { min-width: 0; }
+#place-name { font-size: 19px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#place-sub { font-size: 11px; color: var(--sub); margin-top: 1px; }
+
+.aqi-badge {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--card); border: 1px solid var(--card-line);
+  padding: 6px 12px; border-radius: 999px; font-size: 12px; color: var(--sub);
+}
+.aqi-badge b { color: var(--ink); font-size: 14px; }
+.aqi-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+
+.iconbtn {
+  background: var(--card); border: 1px solid var(--card-line); color: var(--sub);
+  width: 38px; height: 38px; border-radius: 50%; font-size: 16px; cursor: pointer; flex-shrink: 0;
+}
+.iconbtn:active { background: rgba(255,255,255,.14); }
+.iconbtn.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- Scroll body ---------- */
+#scroll {
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 4px 18px 24px; display: flex; flex-direction: column; gap: 14px;
+}
+/* Scrollbars.
+   Do NOT set `scrollbar-width` or `scrollbar-color` anywhere in here. From
+   Chromium 121 the standard properties win outright and every
+   ::-webkit-scrollbar-* rule below is ignored, which drops the page back to the
+   OS scrollbar — fat, and with arrow buttons on any machine set to always show
+   scrollbars. That is exactly what `.hourly { scrollbar-width: thin }` used to
+   do to the 24-hour strip. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--w-accent-dim, rgba(255,255,255,.18));
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:active { background: var(--w-accent, rgba(255,255,255,.32)); }
+/* The little stepper arrows at each end. */
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+.card {
+  background: var(--card); border: 1px solid var(--card-line);
+  border-radius: 16px; padding: 14px 16px;
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.card-title {
+  display: flex; align-items: center;
+  font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--sub); margin-bottom: 12px;
+}
+
+/* ---------- Current conditions ---------- */
+.now-card {
+  background: var(--card); border: 1px solid var(--card-line);
+  border-radius: 20px; padding: 18px;
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.now-main { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+#now-icon { font-size: clamp(46px, 11vw, 78px); line-height: 1; }
+#now-temp {
+  font-size: clamp(52px, 14vw, 96px); font-weight: 150;
+  letter-spacing: -.045em; line-height: .95;
+}
+.now-meta { min-width: 0; }
+#now-cond { font-size: clamp(16px, 3.4vw, 22px); font-weight: 600; }
+#now-feels, #now-hilo { font-size: 13px; color: var(--sub); margin-top: 3px; }
+
+.detail-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 1px; margin-top: 16px;
+  background: var(--card-line); border: 1px solid var(--card-line);
+  border-radius: 12px; overflow: hidden;
+}
+.det {
+  background: rgba(10, 16, 24, .45); padding: 9px 11px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.d-l { font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
+.d-v { font-size: 14px; font-weight: 600; white-space: nowrap; }
+
+/* ---------- Hourly ---------- */
+.hourly {
+  display: flex; gap: 4px; overflow-x: auto; padding-bottom: 6px;
+  overscroll-behavior-x: contain;
+}
+.hourly::-webkit-scrollbar { height: 6px; }
+.hr {
+  flex: 0 0 auto; width: 58px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 6px 0; border-radius: 10px;
+}
+.hr.now { background: rgba(108, 182, 255, .13); }
+.hr-t { font-size: 10px; color: var(--muted); }
+.hr.now .hr-t { color: var(--accent); font-weight: 700; }
+.hr-i { font-size: 19px; }
+.hr-v { font-size: 13px; font-weight: 600; }
+.hr-p { font-size: 9.5px; color: var(--accent); height: 12px; }
+
+/* ---------- Map ---------- */
+.map-card { padding-bottom: 12px; }
+.map-status { font-size: 9.5px; color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 500; }
+#map {
+  position: relative; width: 100%; height: clamp(220px, 34vh, 380px);
+  border-radius: 12px; overflow: hidden; background: #0b1017;
+  touch-action: none; cursor: grab; border: 1px solid var(--card-line);
+}
+#map:active { cursor: grabbing; }
+#map-world { position: absolute; inset: 0; will-change: transform; }
+/* Size is set per-tile inline — overzoomed layers use larger spans. */
+#map-world img { position: absolute; display: block; user-select: none; pointer-events: none; }
+#map-world img.radar {
+  /* Fades as you zoom in so the streets underneath stay readable — set in JS. */
+  opacity: var(--radar-op, .8);
+  image-rendering: auto;
+  transition: opacity .25s ease;
+}
+/* Light tile sets (OpenStreetMap) under a dark UI. */
+#map-world img.dim { filter: brightness(.55) saturate(.75) contrast(1.05); }
+#map-fx { position: absolute; inset: 0; pointer-events: none; }
+#map-attr {
+  position: absolute; right: 6px; bottom: 5px; z-index: 5;
+  font-size: 8.5px; color: rgba(255,255,255,.5);
+  background: rgba(0,0,0,.4); padding: 2px 6px; border-radius: 5px;
+}
+#map-zoom {
+  position: absolute; right: 8px; top: 8px; z-index: 5;
+  display: flex; flex-direction: column; gap: 5px;
+}
+#map-zoom button {
+  width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+  background: rgba(10,16,24,.78); border: 1px solid rgba(255,255,255,.14);
+  color: var(--ink); font-size: 17px; line-height: 1;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+#map-zoom button:active { background: var(--w-accent-soft, rgba(108,182,255,.3)); }
+#map-legend {
+  position: absolute; left: 8px; bottom: 8px; z-index: 5;
+  background: rgba(10,16,24,.78); border: 1px solid rgba(255,255,255,.13);
+  border-radius: 9px; padding: 7px 9px; font-size: 9px;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  max-width: 62%;
+}
+.lg-title { color: var(--sub); font-size: 8.5px; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; }
+.lg-row { display: flex; align-items: center; gap: 5px; }
+.lg-sw { width: 15px; height: 8px; border-radius: 2px; }
+.lg-lab { color: var(--sub); }
+
+.overlay-row { display: flex; gap: 8px; margin-top: 11px; flex-wrap: wrap; }
+/* Basemap picker — cycles the tile source, and shows which one is live. */
+.map-base {
+  background: var(--card); border: 1px solid var(--card-line); color: var(--sub);
+  border-radius: 999px; padding: 4px 11px; margin-left: 8px;
+  font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  cursor: pointer; font-family: inherit; white-space: nowrap;
+}
+.map-base:active { background: var(--w-accent-soft, rgba(255,255,255,.14)); color: var(--ink); }
+
+.ov-btn {
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(255,255,255,.05); border: 1px solid var(--card-line);
+  color: var(--sub); border-radius: 999px; padding: 8px 15px;
+  font-size: 12.5px; font-weight: 600; cursor: pointer; min-height: 40px;
+  font-family: inherit;
+}
+.ov-btn:active { background: rgba(255,255,255,.12); }
+.ov-btn.on { background: var(--w-accent-soft, rgba(108,182,255,.17)); border-color: var(--w-accent-line, rgba(108,182,255,.5)); color: var(--w-text, #cfe6ff); }
+.ov-ico { font-size: 14px; }
+
+/* ---------- Air quality ---------- */
+.aq-head { display: flex; align-items: center; gap: 14px; }
+#aq-big { font-size: clamp(34px, 8vw, 52px); font-weight: 200; letter-spacing: -.03em; line-height: 1; }
+.aq-label { font-size: 15px; font-weight: 700; }
+.aq-desc { font-size: 11.5px; color: var(--sub); margin-top: 2px; line-height: 1.35; }
+
+.aq-scale {
+  position: relative; height: 7px; border-radius: 4px; margin: 14px 0 4px;
+  background: linear-gradient(90deg,
+    #00c853 0%, #00c853 16.6%,
+    #ffd600 16.6%, #ffd600 33.3%,
+    #ff8f00 33.3%, #ff8f00 50%,
+    #e53935 50%, #e53935 66.6%,
+    #8e24aa 66.6%, #8e24aa 83.3%,
+    #7b1741 83.3%, #7b1741 100%);
+}
+.aq-marker {
+  position: absolute; top: -4px; width: 4px; height: 15px; border-radius: 2px;
+  background: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.55); left: 0;
+  transition: left .6s ease;
+}
+
+.pollutants {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 9px; margin-top: 14px;
+}
+.pol { background: rgba(10,16,24,.4); border-radius: 10px; padding: 8px 10px; }
+.pol-h { display: flex; align-items: baseline; gap: 5px; }
+.pol-n { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.pol-v { font-size: 14px; font-weight: 600; margin-left: auto; }
+.pol-u { font-size: 9px; color: var(--muted); }
+.pol-bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.1); margin-top: 6px; overflow: hidden; }
+.pol-fill { display: block; height: 100%; border-radius: 2px; transition: width .6s ease; }
+
+/* ---------- Daily ---------- */
+.daily { display: flex; flex-direction: column; gap: 2px; }
+.dy {
+  display: grid; grid-template-columns: 62px 30px 1fr 96px;
+  align-items: center; gap: 10px; padding: 7px 6px; border-radius: 9px;
+}
+.dy:nth-child(odd) { background: rgba(255,255,255,.03); }
+.dy-n { font-size: 13px; font-weight: 600; }
+.dy-i { font-size: 18px; text-align: center; }
+.dy-p { font-size: 10px; color: var(--accent); }
+.dy-r { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.dy-lo { font-size: 12.5px; color: var(--muted); width: 30px; text-align: right; }
+.dy-hi { font-size: 12.5px; font-weight: 600; width: 30px; }
+.dy-bar { flex: 1; height: 4px; border-radius: 2px; background: rgba(255,255,255,.1); position: relative; max-width: 46px; }
+.dy-seg { position: absolute; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--w-accent-dim, #4a90d9), var(--w-accent, #ffb347)); }
+
+.foot { font-size: 10px; color: var(--muted); text-align: center; padding: 2px 0 6px; }
+
+@media (max-width: 520px) {
+  .dy { grid-template-columns: 54px 26px 1fr 84px; }
+}

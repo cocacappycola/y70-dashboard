@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Spotify · Y70</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ===== Setup screen (shown if CLIENT_ID is missing) ===== -->
+  <section id="setup" class="screen hidden">
+    <div class="setup-card">
+      <h1>Setup needed</h1>
+      <p>Open <code>config.js</code> and paste your Spotify <b>Client ID</b>.</p>
+      <ol>
+        <li>Go to <b>developer.spotify.com/dashboard</b> → Create app</li>
+        <li>Add redirect URI: <code>http://127.0.0.1:8888/callback</code></li>
+        <li>Enable <b>Web API</b> + <b>Web Playback SDK</b></li>
+        <li>Copy the Client ID into <code>config.js</code>, then reload.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ===== Login screen ===== -->
+  <section id="login" class="screen hidden">
+    <div class="login-card">
+      <div class="brand-mark">♫</div>
+      <h1>Spotify · Y70</h1>
+      <p id="login-note">Playlists &amp; queue, on your Y70 screen.</p>
+      <button id="login-btn" class="btn-primary big">Connect Spotify</button>
+    </div>
+  </section>
+
+  <!-- ===== Main app ===== -->
+  <section id="app" class="screen hidden">
+    <main id="views">
+
+      <!-- Home / Your Library -->
+      <div id="view-home" class="view active">
+        <div class="home-top">
+          <div class="home-title">Your Library</div>
+          <div class="chips">
+            <button class="chip active" data-nav="home">Playlists</button>
+            <button class="chip" data-nav="queue">Queue</button>
+          </div>
+          <div class="searchbox">
+            <span id="search-ico" class="search-ico"></span>
+            <input id="search-input" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="What do you want to play?" />
+            <button id="search-clear" class="search-clear hidden">✕</button>
+          </div>
+        </div>
+        <div id="search-results" class="rows hidden"></div>
+        <div id="playlist-grid" class="playlist-grid"></div>
+      </div>
+
+      <!-- Playlist / Liked Songs detail -->
+      <div id="view-playlist" class="view">
+        <div id="pl-head" class="pl-head">
+          <button id="pl-back" class="iconbtn back"></button>
+          <div class="pl-head-main">
+            <img id="pl-art" alt="" />
+            <div class="pl-head-meta">
+              <div class="pl-type">Playlist</div>
+              <h1 id="pl-name"></h1>
+              <div id="pl-count" class="pl-count"></div>
+            </div>
+          </div>
+          <button id="pl-play" class="playfab" aria-label="Play"></button>
+        </div>
+        <div id="pl-tracks" class="rows"></div>
+      </div>
+
+      <!-- Queue -->
+      <div id="view-queue" class="view">
+        <div class="queue-top">
+          <button id="q-back" class="iconbtn back"></button>
+          <div class="home-title">Queue</div>
+        </div>
+        <div id="queue-list" class="rows queue-rows"></div>
+      </div>
+
+    </main>
+
+    <!-- Player bar -->
+    <footer id="playerbar">
+      <div class="pb-row1">
+        <div class="pb-left">
+          <img id="pb-art" alt="" />
+          <div class="pb-meta">
+            <div id="pb-title">Nothing playing</div>
+            <div id="pb-artist">—</div>
+          </div>
+          <button id="pb-heart" class="iconbtn heart" aria-label="Save to Liked Songs"></button>
+        </div>
+        <div class="pb-center">
+          <button id="pb-shuffle" class="iconbtn" aria-label="Shuffle"></button>
+          <button id="pb-prev" class="iconbtn" aria-label="Previous"></button>
+          <button id="pb-play" class="playbtn" aria-label="Play/Pause"></button>
+          <button id="pb-next" class="iconbtn" aria-label="Next"></button>
+          <button id="pb-repeat" class="iconbtn" aria-label="Repeat"></button>
+        </div>
+        <div class="pb-right">
+          <span id="pb-device" class="pb-device hidden"></span>
+          <button id="pb-queue" class="iconbtn" aria-label="Queue"></button>
+          <button id="pb-devices" class="iconbtn" aria-label="Devices"></button>
+          <div class="pb-vol">
+            <span id="vol-ico" class="vol-ico"></span>
+            <input id="pb-vol" type="range" min="0" max="100" value="50" />
+          </div>
+        </div>
+      </div>
+      <div class="pb-row2">
+        <span id="pb-elapsed">0:00</span>
+        <div id="pb-bar" class="seek">
+          <div id="pb-fill" class="seek-fill"></div>
+          <div id="pb-knob" class="seek-knob"></div>
+        </div>
+        <span id="pb-duration">0:00</span>
+      </div>
+    </footer>
+
+    <div id="devices-pop" class="pop hidden"></div>
+    <div id="toast" class="toast hidden"></div>
+  </section>
+
+  <script src="https://sdk.scdn.co/spotify-player.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

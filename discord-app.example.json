@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "Copy this file to  discord-app.json  and fill in your own values.",
+    "",
+    "1. https://discord.com/developers/applications  ->  New Application.",
+    "   Creating it makes you the OWNER, which is the whole trick: the rpc.*",
+    "   scopes are whitelist-only for public apps, but an owner may always",
+    "   authorise their own application. So this app id works for you and",
+    "   nobody else.",
+    "2. OAuth2 tab -> copy the Client ID, then Reset Secret and copy that.",
+    "3. OAuth2 -> Redirects -> add exactly  http://localhost  -> Save Changes.",
+    "   It is never opened; it only has to match what the token exchange sends.",
+    "4. Put both values below, save as discord-app.json, restart node server.js.",
+    "5. Run the Discord DESKTOP app (the browser version has no local socket),",
+    "   open the Discord widget, tap Link Discord and approve the popup.",
+    "",
+    "Scopes requested: rpc, rpc.voice.read, rpc.voice.write, identify.",
+    "No bot, no server invite, no guild permissions - this is a local,",
+    "user-level authorisation. Both this file and discord-token.json are",
+    "refused by the web server and never reach the browser."
+  ],
+  "clientId": "",
+  "clientSecret": ""
+}

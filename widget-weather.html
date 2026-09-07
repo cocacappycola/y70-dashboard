@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Weather</title>
+  <script src="/theme.js"></script>
+  <script src="/weather-bg.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      /* Fallback only — once weather-bg.js paints, the canvas covers this. */
+      background: linear-gradient(165deg, var(--w-grad, #0e1a2b) 0%, var(--w-bg, #101014) 65%);
+      color: var(--w-text, #f0f4f8);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    /* Live sky: rain, snow, drifting cloud, stars, sun glow, storm flashes. */
+    #bg { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; display: block; }
+    /* Keeps text readable over a bright sun glow or a pale snow sky. */
+    #scrim {
+      position: fixed; inset: 0; z-index: 1; pointer-events: none;
+      background: linear-gradient(105deg, rgba(0,0,0,.42) 0%, rgba(0,0,0,.16) 55%, rgba(0,0,0,.34) 100%);
+    }
+    #wrap { position: relative; z-index: 2; height: 100%; display: flex; flex-direction: column; padding: 12px 16px; }
+    #wrap, #wrap * { text-shadow: 0 1px 3px rgba(0,0,0,.45); }
+    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--w-sub, #8fa3b8); }
+    .spacer { flex: 1; }
+    #place { font-size: 11px; color: var(--w-sub, #8fa3b8); }
+    #now {
+      flex: 1; min-height: 0; display: flex; align-items: center; gap: 18px; padding: 4px 0;
+    }
+    #icon { font-size: clamp(38px, 9vw, 64px); line-height: 1; }
+    #temp { font-size: clamp(34px, 8vw, 58px); font-weight: 200; letter-spacing: -.03em; }
+    .now-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    #cond { font-size: clamp(13px, 2.4vw, 17px); font-weight: 600; }
+    #hilo, #extra { font-size: clamp(11px, 2vw, 13px); color: var(--w-sub, #8fa3b8); }
+
+    /* ---- Clock tile (fills the gap on the right, styled like the Claude
+            usage box: a soft card with a light hero value + caption label) ---- */
+    #clock {
+      flex-shrink: 0; margin-left: auto; text-align: right;
+      background: var(--w-card, rgba(255,255,255,.045));
+      border: 1px solid var(--w-card-line, rgba(255,255,255,.09));
+      border-radius: 10px; padding: 7px 12px 6px;
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    }
+    #clock-time {
+      font-size: clamp(24px, 5.6vw, 40px); font-weight: 200; letter-spacing: -.02em;
+      line-height: 1; white-space: nowrap;
+    }
+    #clock-time .ampm {
+      font-size: .36em; font-weight: 700; letter-spacing: .08em;
+      color: var(--w-accent, #6cb6ff); margin-left: .28em; vertical-align: .12em;
+    }
+    #clock-date {
+      font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
+      color: var(--w-sub, #8fa3b8); margin-top: 4px; white-space: nowrap;
+    }
+
+    #days {
+      flex-shrink: 0; display: flex; gap: 6px; padding-top: 6px;
+      border-top: 1px solid var(--w-card-line, rgba(255,255,255,.18));
+    }
+    .day { flex: 1; text-align: center; padding: 4px 0; border-radius: 8px; }
+    .day .d-name { font-size: 10px; color: var(--w-sub, #8fa3b8); text-transform: uppercase; letter-spacing: .05em; }
+    .day .d-ico { font-size: 17px; margin: 2px 0; }
+    .day .d-t { font-size: 11px; }
+    .day .d-t .lo { color: var(--w-sub, #8fa3b8); }
+    #err { color: var(--w-sub, #8fa3b8); font-size: 13px; padding: 20px 0; }
+    body.app #wrap { padding: 22px 24px; }
+    body.app .day .d-ico { font-size: 24px; }
+    body.app .day { padding: 10px 0; background: var(--w-card, rgba(255,255,255,.04)); }
+
+    /* Very short panels: drop the date line so the time still fits. */
+    @media (max-height: 130px) {
+      #clock-date { display: none; }
+      #clock { padding: 5px 10px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="bg"></canvas>
+  <div id="scrim"></div>
+  <div id="wrap">
+    <div class="head">
+      <div class="label">Weather</div>
+      <div class="spacer"></div>
+      <div id="place"></div>
+    </div>
+    <div id="now">
+      <div id="icon">…</div>
+      <div id="temp"></div>
+      <div class="now-meta">
+        <div id="cond">Loading…</div>
+        <div id="hilo"></div>
+        <div id="extra"></div>
+      </div>
+      <div id="clock">
+        <div id="clock-time">--:--</div>
+        <div id="clock-date">—</div>
+      </div>
+    </div>
+    <div id="days"></div>
+  </div>
+
+  <script src="/config.js"></script>
+  <script>
+    if (new URLSearchParams(location.search).get("mode") === "app") document.body.classList.add("app");
+
+    // ---- Reactive sky ---------------------------------------------------------
+    // Same engine as the full weather app, at a lower particle density: the dock
+    // panel is a fraction of the app's height, so the app's counts read as a
+    // blizzard in it.
+    const sky = WeatherBg.create(document.getElementById("bg"), { density: 0.42 });
+    sky.start();
+    addEventListener("resize", () => sky.resize());
+    // A collapsed or hidden panel should not burn a rAF loop.
+    document.addEventListener("visibilitychange", () => {
+      document.hidden ? sky.stop() : sky.start();
+    });
+
+    // ---- Clock ---------------------------------------------------------------
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+    function tick() {
+      const d = new Date();
+      let h = d.getHours();
+      const ampm = h < 12 ? "AM" : "PM";
+      h = h % 12 || 12;                       // 12-hour clock, midnight = 12
+      const m = String(d.getMinutes()).padStart(2, "0");
+      document.getElementById("clock-time").innerHTML =
+        h + ":" + m + '<span class="ampm">' + ampm + "</span>";
+      document.getElementById("clock-date").textContent =
+        DAYS[d.getDay()] + " · " + MONTHS[d.getMonth()] + " " + d.getDate();
+
+      // Re-align to the top of the next minute rather than free-running on a
+      // 60s interval, which would drift and flip the minute a beat late.
+      setTimeout(tick, 60000 - (d.getSeconds() * 1000 + d.getMilliseconds()) + 20);
+    }
+    tick();
+
+    // ---- Weather -------------------------------------------------------------
+    // WMO weather codes -> label + emoji
+    const WMO = {
+      0: ["Clear", "☀️"], 1: ["Mostly clear", "🌤️"], 2: ["Partly cloudy", "⛅"], 3: ["Overcast", "☁️"],
+      45: ["Fog", "🌫️"], 48: ["Rime fog", "🌫️"],
+      51: ["Light drizzle", "🌦️"], 53: ["Drizzle", "🌦️"], 55: ["Heavy drizzle", "🌧️"],
+      61: ["Light rain", "🌧️"], 63: ["Rain", "🌧️"], 65: ["Heavy rain", "🌧️"],
+      66: ["Freezing rain", "🌧️"], 67: ["Freezing rain", "🌧️"],
+      71: ["Light snow", "🌨️"], 73: ["Snow", "🌨️"], 75: ["Heavy snow", "❄️"], 77: ["Snow grains", "❄️"],
+      80: ["Showers", "🌦️"], 81: ["Showers", "🌧️"], 82: ["Heavy showers", "⛈️"],
+      85: ["Snow showers", "🌨️"], 86: ["Snow showers", "❄️"],
+      95: ["Thunderstorm", "⛈️"], 96: ["Storm + hail", "⛈️"], 99: ["Storm + hail", "⛈️"],
+    };
+    const wmo = (c) => WMO[c] || ["—", "🌡️"];
+
+    function getCoords() {
+      return new Promise((resolve) => {
+        const cfg = (window.SPOTIFY_CONFIG && window.SPOTIFY_CONFIG.WEATHER) || {};
+        if (cfg.LAT != null && cfg.LON != null) {
+          return resolve({ lat: cfg.LAT, lon: cfg.LON, label: cfg.LABEL || "" });
+        }
+        if (!navigator.geolocation) return resolve({ lat: 40.71, lon: -74.01, label: "New York (default)" });
+        navigator.geolocation.getCurrentPosition(
+          (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude, label: "" }),
+          () => resolve({ lat: 40.71, lon: -74.01, label: "New York (set coords in config.js)" }),
+          { timeout: 5000 }
+        );
+      });
+    }
+
+    async function load() {
+      try {
+        const { lat, lon, label } = await getCoords();
+        document.getElementById("place").textContent = label;
+        const url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat + "&longitude=" + lon +
+          "&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,apparent_temperature,is_day" +
+          "&daily=temperature_2m_max,temperature_2m_min,weather_code" +
+          "&timezone=auto&forecast_days=5&temperature_unit=fahrenheit&wind_speed_unit=mph";
+        const res = await fetch(url);
+        const d = await res.json();
+
+        sky.setCode(d.current.weather_code, d.current.is_day !== 0);
+
+        const [condTxt, condIco] = wmo(d.current.weather_code);
+        document.getElementById("icon").textContent = condIco;
+        document.getElementById("temp").textContent = Math.round(d.current.temperature_2m) + "°";
+        document.getElementById("cond").textContent = condTxt;
+        document.getElementById("hilo").textContent =
+          "H " + Math.round(d.daily.temperature_2m_max[0]) + "°  L " + Math.round(d.daily.temperature_2m_min[0]) + "°";
+        document.getElementById("extra").textContent =
+          "Feels " + Math.round(d.current.apparent_temperature) + "° · " +
+          Math.round(d.current.wind_speed_10m) + " mph · " + d.current.relative_humidity_2m + "%";
+
+        const days = document.getElementById("days");
+        days.innerHTML = "";
+        for (let i = 0; i < d.daily.time.length; i++) {
+          const dt = new Date(d.daily.time[i] + "T12:00:00");
+          const [, ico] = wmo(d.daily.weather_code[i]);
+          const el = document.createElement("div");
+          el.className = "day";
+          el.innerHTML =
+            '<div class="d-name">' + (i === 0 ? "Today" : DAYS[dt.getDay()]) + "</div>" +
+            '<div class="d-ico">' + ico + "</div>" +
+            '<div class="d-t">' + Math.round(d.daily.temperature_2m_max[i]) + "° <span class='lo'>" +
+            Math.round(d.daily.temperature_2m_min[i]) + "°</span></div>";
+          days.appendChild(el);
+        }
+      } catch (e) {
+        document.getElementById("cond").textContent = "Couldn't load weather";
+        document.getElementById("extra").textContent = "Check your internet connection";
+      }
+    }
+
+    load();
+    setInterval(load, 15 * 60 * 1000); // refresh every 15 min
+  </script>
+</body>
+</html>

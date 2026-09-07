@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Timer</title>
+  <script src="/theme.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--u-grad, #22200f) 0%, var(--u-bg, #101014) 60%);
+      color: var(--u-text, #f5f2e6);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 14px 8px; gap: 8px; }
+    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .chip {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--u-accent, #e8d44d); color: var(--u-accent-ink, #000);
+      display: flex; align-items: center; justify-content: center; font-size: 12px;
+    }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--u-sub, #b0aa8e); }
+    .spacer { flex: 1; }
+
+    .presets { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+    .pz {
+      background: var(--u-card, rgba(255,255,255,.05));
+      border: 1px solid var(--u-card-line, rgba(255,255,255,.1));
+      color: var(--u-text, #fff); border-radius: 9px; padding: 8px 12px;
+      font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; min-height: 38px;
+    }
+    .pz:active { background: var(--u-surface-2, rgba(255,255,255,.13)); }
+    .pz.stop { border-color: var(--u-accent-line, rgba(232,212,77,.4)); color: var(--u-accent, #e8d44d); }
+
+    #list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; }
+    #list::-webkit-scrollbar { width: 5px; }
+    #list::-webkit-scrollbar-thumb { background: var(--u-accent-dim, #4a4630); border-radius: 3px; }
+    #list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+
+    .tm {
+      display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px;
+      background: var(--u-card, rgba(255,255,255,.045));
+      border: 1px solid var(--u-card-line, rgba(255,255,255,.08));
+      position: relative; overflow: hidden;
+    }
+    /* Progress runs underneath the row rather than as a separate bar. */
+    .tm .bg { position: absolute; inset: 0; width: 0%; background: var(--u-accent-soft, rgba(232,212,77,.13)); transition: width .3s linear; }
+    .tm > * { position: relative; }
+    .tm .t-left { font-size: clamp(18px, 4vh, 30px); font-weight: 200; letter-spacing: -.02em; font-variant-numeric: tabular-nums; min-width: 92px; }
+    .tm .t-name { flex: 1; min-width: 0; font-size: 12px; color: var(--u-sub, #b0aa8e); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tm button {
+      background: transparent; border: 1px solid var(--u-card-line, rgba(255,255,255,.12));
+      color: var(--u-sub, #b0aa8e); border-radius: 7px; width: 32px; height: 30px;
+      font-size: 13px; cursor: pointer; flex-shrink: 0; font-family: inherit;
+    }
+    .tm button:active { background: var(--u-surface-2, rgba(255,255,255,.12)); }
+    .tm.paused .t-left { color: var(--u-muted, #7d7960); }
+    .tm.done {
+      border-color: var(--u-accent, #e8d44d);
+      animation: ring 1s ease-in-out infinite;
+    }
+    .tm.done .t-left { color: var(--u-accent, #e8d44d); }
+    @keyframes ring { 0%,100% { background: var(--u-card, rgba(255,255,255,.045)); } 50% { background: var(--u-accent-soft, rgba(232,212,77,.22)); } }
+
+    #empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--u-muted, #7d7960); font-size: 12.5px; }
+    .foot { flex-shrink: 0; font-size: 9px; color: var(--u-muted, #7d7960); }
+    @media (max-height: 200px) { .foot { display: none; } }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">⏱</div>
+      <div class="label">Timer</div>
+      <div class="spacer"></div>
+      <button class="pz stop" id="silence" style="display:none">Silence</button>
+    </div>
+
+    <div class="presets" id="presets"></div>
+
+    <div id="list"></div>
+    <div id="empty">No timers running.</div>
+
+    <div class="foot">timers keep running with the panel closed · tap ⏸ to hold</div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+    const KEY = "y70_timers";
+    const PRESETS = [
+      { s: 60, label: "1m" }, { s: 180, label: "3m" }, { s: 300, label: "5m" },
+      { s: 600, label: "10m" }, { s: 900, label: "15m" }, { s: 1500, label: "25m", name: "Pomodoro" },
+      { s: 3600, label: "1h" },
+    ];
+
+    // A timer is stored as an absolute end time, never a countdown that has to
+    // be ticked — so it stays correct across a reload, a collapsed panel, or a
+    // browser that throttled our timers while hidden.
+    let timers = [];
+    try { timers = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { timers = []; }
+    const save = () => { try { localStorage.setItem(KEY, JSON.stringify(timers)); } catch (e) {} };
+
+    let audioCtx = null, ringing = false, ringTimer = null;
+    function beep() {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        const t = audioCtx.currentTime;
+        for (let i = 0; i < 3; i++) {
+          const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+          o.type = "sine";
+          o.frequency.value = 880;
+          g.gain.setValueAtTime(0, t + i * 0.34);
+          g.gain.linearRampToValueAtTime(0.22, t + i * 0.34 + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.34 + 0.3);
+          o.connect(g); g.connect(audioCtx.destination);
+          o.start(t + i * 0.34); o.stop(t + i * 0.34 + 0.32);
+        }
+      } catch (e) { /* no audio permission yet — the row still flashes */ }
+    }
+
+    function add(seconds, name) {
+      timers.push({
+        id: "t" + Date.now() + Math.random().toString(36).slice(2, 6),
+        name: name || fmtDur(seconds),
+        total: seconds * 1000,
+        endsAt: Date.now() + seconds * 1000,
+        pausedLeft: null,
+        fired: false,
+      });
+      save(); render();
+    }
+    const remove = (id) => { timers = timers.filter((t) => t.id !== id); save(); render(); };
+    function togglePause(id) {
+      const t = timers.find((x) => x.id === id);
+      if (!t) return;
+      if (t.pausedLeft == null) t.pausedLeft = Math.max(0, t.endsAt - Date.now());
+      else { t.endsAt = Date.now() + t.pausedLeft; t.pausedLeft = null; }
+      save(); render();
+    }
+
+    const left = (t) => (t.pausedLeft != null ? t.pausedLeft : Math.max(0, t.endsAt - Date.now()));
+    function fmtLeft(ms) {
+      const s = Math.ceil(ms / 1000);
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+      if (h) return h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+      return m + ":" + String(sec).padStart(2, "0");
+    }
+    function fmtDur(s) {
+      if (s >= 3600) return (s / 3600) + "h";
+      if (s >= 60) return (s / 60) + "m";
+      return s + "s";
+    }
+
+    function renderPresets() {
+      const box = $("presets");
+      box.innerHTML = "";
+      for (const p of PRESETS) {
+        const b = document.createElement("button");
+        b.className = "pz";
+        b.textContent = p.label;
+        b.addEventListener("pointerup", () => { beepUnlock(); add(p.s, p.name); });
+        box.appendChild(b);
+      }
+    }
+
+    // Browsers won't make sound until a gesture; the first tap unlocks it so the
+    // alarm can actually ring later.
+    function beepUnlock() {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume();
+      } catch (e) {}
+    }
+
+    function render() {
+      const list = $("list");
+      $("empty").style.display = timers.length ? "none" : "flex";
+      const sig = timers.map((t) => t.id).join("|");
+      if (list.dataset.sig !== sig) {
+        list.dataset.sig = sig;
+        list.innerHTML = "";
+        for (const t of timers) {
+          const el = document.createElement("div");
+          el.className = "tm";
+          el.dataset.id = t.id;
+          el.innerHTML =
+            '<div class="bg"></div>' +
+            '<div class="t-left">0:00</div>' +
+            '<div class="t-name"></div>' +
+            '<button class="b-pause">⏸</button>' +
+            '<button class="b-del">✕</button>';
+          el.querySelector(".t-name").textContent = t.name;
+          el.querySelector(".b-pause").addEventListener("pointerup", () => togglePause(t.id));
+          el.querySelector(".b-del").addEventListener("pointerup", () => remove(t.id));
+          list.appendChild(el);
+        }
+      }
+      tick();
+    }
+
+    function tick() {
+      let anyDone = false;
+      for (const t of timers) {
+        const el = $("list").querySelector('.tm[data-id="' + t.id + '"]');
+        if (!el) continue;
+        const ms = left(t);
+        const done = ms <= 0;
+        el.querySelector(".t-left").textContent = done ? "0:00" : fmtLeft(ms);
+        el.querySelector(".bg").style.width = (100 - Math.min(100, (ms / t.total) * 100)).toFixed(1) + "%";
+        el.classList.toggle("paused", t.pausedLeft != null);
+        el.classList.toggle("done", done);
+        el.querySelector(".b-pause").textContent = t.pausedLeft != null ? "▶" : "⏸";
+        if (done) {
+          anyDone = true;
+          if (!t.fired) { t.fired = true; save(); startRinging(); }
+        }
+      }
+      $("silence").style.display = anyDone ? "block" : "none";
+      if (!anyDone) stopRinging();
+    }
+
+    function startRinging() {
+      if (ringing) return;
+      ringing = true;
+      beep();
+      // Repeat until acknowledged, but not forever — two minutes is plenty.
+      let n = 0;
+      ringTimer = setInterval(() => { if (++n > 40) return stopRinging(); beep(); }, 3000);
+    }
+    function stopRinging() {
+      ringing = false;
+      if (ringTimer) clearInterval(ringTimer);
+      ringTimer = null;
+    }
+
+    $("silence").addEventListener("pointerup", () => {
+      timers = timers.filter((t) => left(t) > 0);
+      stopRinging(); save(); render();
+    });
+
+    renderPresets();
+    render();
+    setInterval(tick, 250);
+  </script>
+</body>
+</html>

@@ -1,0 +1,399 @@
+/* ===========================================================================
+   Spotify · Y70 — styled to match Spotify's own dark UI.
+   Palette / spacing lifted from the real app: #121212 bg, #181818 cards,
+   #282828 hover, #b3b3b3 secondary text, #1ed760 green.
+   =========================================================================== */
+
+:root {
+  --bg: #121212;
+  --bg-deep: #000;
+  --card: #181818;
+  --card-hover: #282828;
+  --elev: #242424;
+  --text: #ffffff;
+  --sub: #b3b3b3;
+  --green: #1ed760;
+  --green-press: #169c46;
+  --seek-track: #4d4d4d;
+  --tap: 48px;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+.hidden { display: none !important; }
+.screen { height: 100vh; width: 100vw; }
+
+button { font-family: inherit; }
+
+/* ---------- Setup / Login ---------- */
+#setup, #login {
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: linear-gradient(160deg, #1f1f1f 0%, var(--bg) 55%);
+}
+.setup-card, .login-card {
+  background: var(--card); border-radius: 12px;
+  padding: 36px; max-width: 520px; width: 100%; text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,.6);
+}
+.setup-card { text-align: left; }
+.setup-card h1, .login-card h1 { margin: 0 0 12px; font-size: 28px; letter-spacing: -.02em; }
+.setup-card ol { line-height: 1.9; color: var(--sub); padding-left: 20px; }
+.setup-card code, .login-card code {
+  background: var(--elev); padding: 2px 8px; border-radius: 6px;
+  font-size: 14px; color: #cfe9d6;
+}
+.brand-mark {
+  width: 84px; height: 84px; margin: 0 auto 16px; border-radius: 50%;
+  background: var(--green); color: #000; font-size: 42px;
+  display: flex; align-items: center; justify-content: center; font-weight: 700;
+}
+.login-card p { color: var(--sub); margin: 6px 0 28px; }
+
+.btn-primary {
+  background: var(--green); color: #000; border: none; font-weight: 700;
+  border-radius: 999px; padding: 14px 28px; font-size: 16px; cursor: pointer;
+  transition: transform .06s ease, background .15s ease;
+}
+.btn-primary:active { transform: scale(.97); background: var(--green-press); }
+.btn-primary.big { padding: 18px 44px; font-size: 18px; }
+
+/* ---------- App shell ---------- */
+#app { display: flex; flex-direction: column; }
+#views { flex: 1; min-height: 0; position: relative; }
+.view {
+  position: absolute; inset: 0; overflow-y: auto; display: none;
+  -webkit-overflow-scrolling: touch;
+}
+.view.active { display: block; }
+
+/* ---------- Home / library ---------- */
+.home-top { padding: 20px 16px 8px; position: sticky; top: 0; background: var(--bg); z-index: 5; }
+.home-title { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-bottom: 12px; }
+
+.chips { display: flex; gap: 8px; margin-bottom: 12px; }
+.chip {
+  background: var(--card-hover); color: var(--text); border: none; cursor: pointer;
+  border-radius: 999px; padding: 8px 16px; font-size: 14px; font-weight: 500;
+  transition: background .15s ease;
+}
+.chip.active { background: var(--text); color: #000; font-weight: 600; }
+
+.searchbox {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--elev); border-radius: 999px; padding: 0 16px; height: 46px;
+}
+.searchbox:focus-within { outline: 2px solid rgba(255,255,255,.5); }
+.search-ico { display: flex; color: var(--sub); }
+#search-input {
+  flex: 1; background: transparent; border: none; outline: none;
+  color: var(--text); font-size: 15px; height: 100%;
+}
+#search-input::placeholder { color: var(--sub); }
+.search-clear {
+  background: transparent; border: none; color: var(--sub); font-size: 16px;
+  cursor: pointer; padding: 6px;
+}
+
+/* Playlist card grid */
+.playlist-grid {
+  padding: 8px 16px 24px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px;
+}
+.pl-card {
+  background: var(--card); border-radius: 8px; padding: 12px;
+  cursor: pointer; transition: background .2s ease;
+}
+.pl-card:hover, .pl-card:active { background: var(--card-hover); }
+.pl-card img, .pl-card .liked-cover {
+  width: 100%; aspect-ratio: 1; border-radius: 6px; object-fit: cover;
+  background: var(--elev); display: block;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+.liked-cover {
+  background: linear-gradient(135deg, #450af5 0%, #8e8ee5 60%, #c4efd9 100%);
+  display: flex; align-items: center; justify-content: center; color: #fff;
+}
+.pl-card .pl-name {
+  margin-top: 10px; font-size: 14px; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pl-card .pl-sub { font-size: 12px; color: var(--sub); margin-top: 4px; }
+
+.grid-msg { grid-column: 1 / -1; color: var(--sub); padding: 24px 8px; font-size: 14px; line-height: 1.6; }
+
+/* ---------- Playlist detail ---------- */
+.pl-head { position: relative; padding: 12px 16px 20px; }
+.pl-head::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(180deg, var(--pl-tint, #535353) 0%, rgba(18,18,18,0) 100%);
+  opacity: .75;
+}
+.iconbtn.back { margin-bottom: 8px; }
+.pl-head-main { display: flex; gap: 16px; align-items: flex-end; }
+#pl-art {
+  width: 132px; height: 132px; border-radius: 4px; object-fit: cover;
+  background: var(--elev); box-shadow: 0 16px 40px rgba(0,0,0,.6); flex-shrink: 0;
+}
+.pl-head-meta { min-width: 0; padding-bottom: 4px; }
+.pl-type { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+#pl-name {
+  margin: 6px 0; font-size: clamp(22px, 5vw, 40px); font-weight: 800; letter-spacing: -.03em;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.pl-count { color: var(--sub); font-size: 13px; }
+.playfab {
+  position: absolute; right: 20px; bottom: -26px; z-index: 6;
+  width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
+  background: var(--green); color: #000;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 8px 16px rgba(0,0,0,.4);
+  transition: transform .06s ease, background .15s ease;
+}
+.playfab:active { transform: scale(1.04); background: var(--green-press); }
+
+/* ---------- Track rows ---------- */
+.rows { padding: 20px 8px 24px; }
+.queue-rows, #search-results { padding-top: 4px; }
+.row {
+  display: grid; grid-template-columns: 28px 40px 1fr auto auto auto auto; gap: 12px;
+  align-items: center; padding: 8px 10px; border-radius: 6px; min-height: var(--tap);
+  cursor: pointer; background: var(--bg);
+}
+.row.no-index { grid-template-columns: 40px 1fr auto auto auto auto; }
+.row:hover, .row:active { background: rgba(255,255,255,.08); }
+.row-idx { color: var(--sub); font-size: 14px; text-align: right; font-variant-numeric: tabular-nums; }
+.row img { width: 40px; height: 40px; border-radius: 4px; object-fit: cover; background: var(--elev); }
+.row-main { min-width: 0; }
+.row-title {
+  font-size: 15px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.row-title.playing { color: var(--green); }
+.row-sub {
+  font-size: 13px; color: var(--sub); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.row-dur { color: var(--sub); font-size: 13px; font-variant-numeric: tabular-nums; }
+.row-add {
+  background: transparent; color: var(--sub); border: none; cursor: pointer;
+  width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.row-add:hover, .row-add:active { color: var(--text); }
+
+/* Remove-from-queue */
+.row-x {
+  background: transparent; color: var(--sub); border: none; cursor: pointer;
+  width: 34px; height: 34px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.row-x:hover, .row-x:active { color: var(--text); }
+
+/* Drag grip — the three bars, last in the row after the duration */
+.row-grip {
+  background: transparent; color: var(--sub); border: none; cursor: grab;
+  width: 40px; height: 44px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: none;   /* drag the row instead of scrolling the list */
+}
+.row-grip:hover { color: var(--text); }
+.row-grip:active { cursor: grabbing; background: rgba(255,255,255,.08); }
+
+.row.sortable.dragging {
+  opacity: .95; background: var(--card-hover);
+  box-shadow: 0 10px 26px rgba(0,0,0,.55);
+  outline: 1px solid rgba(30,215,96,.55);
+}
+
+.section-note {
+  font-weight: 500; color: var(--sub); text-transform: none;
+  letter-spacing: 0; font-size: 11px; opacity: .75;
+}
+
+/* Up next scrolls inside a capped area — otherwise every ＋ grows it and pushes
+   the list you're tapping further down the screen. */
+#local-queue { max-height: 38vh; overflow-y: auto; }
+
+/* Captured playlist list — rows stay put once added, they just dim */
+#source-head {
+  display: flex; align-items: center; gap: 10px;
+  padding-right: 8px;
+}
+#source-head .section-label { flex: 1; }
+#add-all { flex-shrink: 0; }
+/* Queued source rows stay fully usable — ＋ keeps working so a song can be
+   added more than once; a ✓ / ×N badge shows how many times it's in the queue. */
+.row-count {
+  font-size: 11px; font-weight: 700; color: var(--green);
+  min-width: 20px; text-align: right;
+}
+.row.queued .row-title { color: var(--green); }
+
+.rows .section-label {
+  color: var(--sub); font-size: 13px; font-weight: 700; padding: 14px 10px 6px;
+  text-transform: none;
+}
+.empty { color: var(--sub); text-align: center; padding: 40px 20px; font-size: 15px; }
+
+/* ---------- Queue view ---------- */
+.queue-top { display: flex; align-items: center; gap: 8px; padding: 16px 16px 4px; }
+.queue-top .home-title { margin-bottom: 0; }
+
+/* ---------- Player bar ---------- */
+#playerbar {
+  background: var(--bg-deep); border-top: 1px solid #292929;
+  padding: 10px 14px 12px; flex-shrink: 0;
+}
+.pb-row1 {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px;
+}
+.pb-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+#pb-art { width: 52px; height: 52px; border-radius: 4px; object-fit: cover; background: var(--elev); }
+.pb-meta { min-width: 0; }
+#pb-title {
+  font-size: 14px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#pb-artist {
+  font-size: 12px; color: var(--sub); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.pb-center { display: flex; align-items: center; gap: 6px; }
+.iconbtn {
+  background: transparent; border: none; color: var(--sub); cursor: pointer;
+  width: var(--tap); height: var(--tap); border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; position: relative;
+  transition: color .12s ease, transform .06s ease;
+}
+.iconbtn:hover { color: var(--text); }
+.iconbtn:active { transform: scale(.92); }
+.iconbtn.on { color: var(--green); }
+.iconbtn.on::after {
+  content: ""; position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%);
+  width: 4px; height: 4px; border-radius: 50%; background: var(--green);
+}
+.iconbtn .rep-one {
+  position: absolute; top: 7px; right: 7px; font-size: 9px; font-weight: 700; color: var(--green);
+}
+.iconbtn.heart.on::after { display: none; }
+
+.playbtn {
+  width: 52px; height: 52px; border-radius: 50%; border: none; cursor: pointer;
+  background: var(--text); color: #000; margin: 0 6px;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .06s ease;
+}
+.playbtn:active { transform: scale(.94); }
+
+.pb-right { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.pb-vol { display: flex; align-items: center; gap: 8px; width: 130px; }
+.vol-ico { display: flex; color: var(--sub); }
+
+/* Range input (volume) — white bar like Spotify, green when touched */
+input[type="range"] {
+  flex: 1; height: 30px; -webkit-appearance: none; appearance: none; background: transparent;
+  --fill: 50%;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right, var(--text) var(--fill), var(--seek-track) var(--fill));
+}
+input[type="range"]:active::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, var(--green) var(--fill), var(--seek-track) var(--fill));
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; margin-top: -4px;
+  width: 12px; height: 12px; border-radius: 50%; background: var(--text); cursor: pointer;
+}
+
+/* Seek bar */
+.pb-row2 {
+  display: flex; align-items: center; gap: 10px; margin-top: 8px;
+  font-size: 12px; color: var(--sub); font-variant-numeric: tabular-nums;
+}
+.seek {
+  flex: 1; height: 22px; display: flex; align-items: center; position: relative;
+  cursor: pointer; touch-action: none;
+}
+.seek::before {
+  content: ""; position: absolute; left: 0; right: 0; height: 4px; border-radius: 2px;
+  background: var(--seek-track);
+}
+.seek-fill {
+  position: absolute; left: 0; height: 4px; border-radius: 2px; width: 0%;
+  background: var(--text); z-index: 1;
+}
+.seek.dragging .seek-fill, .seek:active .seek-fill { background: var(--green); }
+.seek-knob {
+  position: absolute; z-index: 2; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text); left: 0%; transform: translateX(-50%);
+  box-shadow: 0 2px 6px rgba(0,0,0,.5);
+}
+
+/* ---------- Devices popover ---------- */
+.pop {
+  position: fixed; right: 14px; bottom: 120px; z-index: 40;
+  background: var(--card-hover); border-radius: 8px; padding: 8px; min-width: 240px;
+  box-shadow: 0 16px 40px rgba(0,0,0,.6);
+}
+.pop .pop-title { font-size: 13px; font-weight: 700; padding: 8px 10px 4px; }
+.pop .dev {
+  display: flex; align-items: center; gap: 10px; padding: 12px 10px; border-radius: 6px;
+  cursor: pointer; font-size: 14px;
+}
+.pop .dev:hover, .pop .dev:active { background: rgba(255,255,255,.1); }
+.pop .dev.active { color: var(--green); }
+.pop .dev .dev-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-left: auto; }
+.pop .dev .dev-tag {
+  font-size: 10px; color: var(--sub); border: 1px solid var(--seek-track);
+  border-radius: 999px; padding: 1px 7px; margin-left: 8px; white-space: nowrap;
+}
+
+/* Where the sound is actually coming out. Only shown when that is somewhere
+   other than this screen, so the normal case stays uncluttered. */
+.pb-device {
+  font-size: 11px; font-weight: 600; color: var(--green);
+  background: rgba(30,215,96,.12); border-radius: 999px;
+  padding: 4px 10px; white-space: nowrap; max-width: 130px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+#pb-devices.remote { color: var(--green); }
+
+/* ---------- Toast ---------- */
+.toast {
+  position: fixed; bottom: 130px; left: 50%; transform: translateX(-50%);
+  background: var(--elev); color: var(--text); padding: 12px 20px;
+  border-radius: 8px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  z-index: 50; opacity: 0; transition: opacity .2s ease; white-space: nowrap;
+}
+.toast.show { opacity: 1; }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: hsla(0,0%,100%,.3); border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+/* Never set scrollbar-width/-color alongside these: Chromium 121+ then ignores
+   the whole ::-webkit-scrollbar block and falls back to the OS scrollbar. */
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ---------- Narrow screens ---------- */
+@media (max-width: 760px) {
+  .pb-row1 { grid-template-columns: 1fr auto; }
+  .pb-right { display: none; }
+}
+@media (max-width: 560px) {
+  .pb-center .iconbtn:first-child, .pb-center .iconbtn:last-child { display: none; }
+}

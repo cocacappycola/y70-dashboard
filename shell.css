@@ -1,0 +1,256 @@
+/* ===========================================================================
+   Y70 Dashboard shell — app frame + pull-down drawer + bottom widget dock.
+
+   Colours come from theme.js, which sets --t-* custom properties on <html>.
+   Every var here keeps its original value as a fallback, so the shell still
+   renders correctly if that script never runs.
+   =========================================================================== */
+
+:root {
+  --bg: var(--t-bg, #0a0a0c);
+  --panel: var(--t-surface, #16161a);
+  --panel-2: var(--t-surface-2, #222228);
+  --line: var(--t-line, #2c2c33);
+  --text: var(--t-text, #fff);
+  --sub: var(--t-sub, #b3b3b3);
+  --muted: var(--t-muted, #7a7a85);
+  /* "Trim" = the accent the shell chrome is drawn in. */
+  --trim: var(--t-accent, #1ed760);
+  --trim-ink: var(--t-accent-ink, #000);
+  --trim-dim: var(--t-accent-dim, #3a3a42);
+  --trim-soft: var(--t-accent-soft, rgba(30,215,96,.16));
+  --trim-line: var(--t-accent-line, rgba(30,215,96,.34));
+  --topbar-h: 22px;
+  --panelbar-h: 30px;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow: hidden; user-select: none;
+}
+
+.hidden { display: none !important; }
+
+#shell { height: 100vh; display: flex; flex-direction: column; position: relative; }
+
+/* ---------- Top pull-down bar ---------- */
+#topbar {
+  height: var(--topbar-h); flex-shrink: 0;
+  background: var(--t-bg, #000); display: flex; align-items: center; justify-content: center;
+  border-bottom: 1px solid var(--trim-line);
+  cursor: grab; touch-action: none; z-index: 60; position: relative;
+}
+.grip {
+  width: 44px; height: 5px; border-radius: 3px; background: var(--trim-dim);
+}
+#topbar:active .grip { background: var(--trim); }
+
+/* ---------- Drawer ---------- */
+#drawer-backdrop {
+  position: absolute; inset: var(--topbar-h) 0 0 0;
+  background: rgba(0,0,0,.55); z-index: 49;
+}
+#drawer {
+  position: absolute; top: var(--topbar-h); left: 0; right: 0; z-index: 50;
+  background: var(--t-bg-2, #101014); border-bottom: 1px solid var(--trim-line);
+  border-radius: 0 0 18px 18px;
+  transform: translateY(-101%); transition: transform .22s ease;
+  box-shadow: 0 20px 50px rgba(0,0,0,.6);
+  touch-action: none;
+}
+#drawer.open { transform: translateY(0); }
+#drawer.dragging { transition: none; }
+.drawer-inner, .settings-inner { padding: 14px 16px 4px; }
+.sec-title {
+  font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--sub); margin: 10px 0 8px;
+}
+.tile-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.tile {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); color: var(--text); border: 1px solid transparent;
+  border-radius: 12px; padding: 10px 16px 10px 10px; font-size: 14px; font-weight: 600;
+  cursor: pointer; min-height: 52px;
+}
+.tile:active { background: var(--panel-2); }
+.tile-sub { font-size: 11px; font-weight: 500; color: var(--muted); }
+.tile-ico {
+  width: 32px; height: 32px; border-radius: 8px; font-size: 17px;
+  display: flex; align-items: center; justify-content: center;
+}
+/* Drawer icons preview the palette each surface is themed with. */
+.trim-ico    { background: var(--trim); color: var(--trim-ink); }
+.weather-ico { background: var(--w-accent, #4a90d9); color: var(--w-accent-ink, #fff); }
+.claude-ico  { background: var(--c-accent, #d97757); color: var(--c-accent-ink, #fff); }
+.pc-ico      { background: var(--p-accent, #42d6c3); color: var(--p-accent-ink, #000); }
+.calc-ico    { background: var(--k-accent, #7c5cff); color: var(--k-accent-ink, #fff); }
+.media-ico   { background: var(--m-accent, #1ed760); color: var(--m-accent-ink, #000); }
+.tools-ico   { background: var(--u-accent, #e8d44d); color: var(--u-accent-ink, #000); }
+.discord-ico { background: var(--d-accent, #5865f2); color: var(--d-accent-ink, #fff); }
+.scene-ico   { background: var(--panel-2); color: var(--trim); border: 1px solid var(--trim-line); }
+
+.scene-tile.active .scene-ico { background: var(--trim); color: var(--trim-ink); border-color: transparent; }
+.scene-tile.active { border-color: var(--trim); background: var(--panel-2); }
+.scene-actions { display: flex; gap: 8px; margin-top: 10px; }
+.scene-actions button:disabled { opacity: .35; }
+
+/* ---------- Widget list (drag to reorder) ---------- */
+.sec-hint {
+  font-size: 9.5px; font-weight: 500; letter-spacing: .02em; text-transform: none;
+  color: var(--muted); margin-left: 8px;
+}
+#widget-list { display: flex; flex-direction: column; gap: 6px; }
+.wrow {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid transparent; border-radius: 11px;
+  padding: 8px 12px 8px 6px; min-height: 50px; cursor: pointer;
+  touch-action: none;                 /* the row is a drag surface */
+}
+.wrow:active { background: var(--panel-2); }
+.wrow.on { border-color: var(--trim); }
+.wrow.dragging {
+  opacity: .92; background: var(--panel-2);
+  box-shadow: 0 10px 24px rgba(0,0,0,.55); border-color: var(--trim);
+}
+.wgrip {
+  width: 34px; height: 38px; flex-shrink: 0; cursor: grab;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 15px; border-radius: 8px;
+}
+.wgrip:active { cursor: grabbing; color: var(--trim); background: var(--panel-2); }
+.wname { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wcheck { width: 22px; text-align: center; font-size: 14px; color: var(--muted); flex-shrink: 0; }
+.wrow.on .wcheck::before { content: "\2713"; color: var(--trim); font-weight: 700; }
+.wrow:not(.on) .wcheck::before { content: "\25cb"; opacity: .5; }
+.wrow:not(.on) .tile-ico { filter: grayscale(1); opacity: .5; }
+
+.app-tile.active { border-color: var(--trim); background: var(--panel-2); }
+.wid-tile.on { border-color: var(--trim); }
+.wid-tile.on::after { content: "✓"; color: var(--trim); font-size: 13px; margin-left: 2px; }
+#drawer-close, #settings-close {
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px 0 12px; cursor: pointer;
+}
+
+/* ---------- Settings view ---------- */
+.set-head { display: flex; align-items: center; gap: 6px; padding-bottom: 4px; }
+.set-title { font-size: 13px; font-weight: 700; letter-spacing: .04em; }
+.set-back {
+  background: var(--panel); border: none; color: var(--text);
+  width: 36px; height: 36px; border-radius: 10px; font-size: 20px; line-height: 1;
+  cursor: pointer; flex-shrink: 0;
+}
+.set-back:active { background: var(--panel-2); }
+.set-reset {
+  background: transparent; border: 1px solid var(--line); color: var(--sub);
+  border-radius: 999px; padding: 7px 14px; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit;
+}
+.set-reset:active { background: var(--panel); }
+.panel-spacer { flex: 1; }
+
+/* The drawer can get taller than the screen on a short display, so scroll it. */
+.set-scroll { max-height: 66vh; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
+.set-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.set-scroll::-webkit-scrollbar-thumb { background: var(--trim-dim); border-radius: 3px; }
+.set-scroll::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+
+.set-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--sub); margin: 16px 0 8px;
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.set-hint {
+  font-size: 10px; font-weight: 500; letter-spacing: .02em; text-transform: none;
+  color: var(--muted);
+}
+
+/* Presets */
+.preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.preset {
+  display: flex; flex-direction: column; gap: 7px; align-items: flex-start;
+  background: var(--panel); border: 1px solid transparent; border-radius: 12px;
+  padding: 10px 12px; cursor: pointer; font-family: inherit; min-width: 104px;
+}
+.preset:active { background: var(--panel-2); }
+.preset.on { border-color: var(--trim); }
+.preset-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.preset-dots { display: flex; gap: 5px; }
+.preset-dots i {
+  width: 13px; height: 13px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.14);
+}
+
+/* Swatch rows */
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sw {
+  width: 38px; height: 38px; border-radius: 10px; cursor: pointer;
+  border: 2px solid transparent; padding: 0; position: relative;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
+}
+.sw.on { border-color: var(--text); }
+.sw.on::after {
+  content: "✓"; position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; font-weight: 700; color: var(--sw-ink, #fff);
+  text-shadow: 0 1px 3px rgba(0,0,0,.6);
+}
+/* Native picker chip — the escape hatch for a colour not in the row. */
+.sw-custom {
+  width: 38px; height: 38px; border-radius: 10px; overflow: hidden; position: relative;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
+  background: conic-gradient(#ff5f56, #ffb03d, #e8d44d, #1ed760, #42d6c3, #5aa9ff, #7c5cff, #a85cd6, #ff5ca8, #ff5f56);
+}
+.sw-custom input {
+  position: absolute; inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px);
+  opacity: 0; cursor: pointer; border: none; padding: 0;
+}
+
+.set-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--panel); border-radius: 12px; padding: 12px 14px;
+  margin: 18px 0 6px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.set-toggle .set-hint { display: block; margin-top: 2px; }
+.set-toggle input { width: 22px; height: 22px; accent-color: var(--trim); flex-shrink: 0; }
+
+/* ---------- App area ---------- */
+#appframe { flex: 1; min-height: 0; position: relative; background: var(--t-bg, #000); }
+/* Every opened app stays mounted; only the active one is visible and hittable.
+   opacity (not display:none) keeps background audio alive. */
+.app-frame {
+  position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block;
+  opacity: 0; pointer-events: none; z-index: 0;
+}
+.app-frame.active { opacity: 1; pointer-events: auto; z-index: 1; }
+
+/* ---------- Mini player (auto-shown when leaving Spotify mid-playback) ------ */
+#mini-panel { flex-shrink: 0; height: 60px; border-top: 1px solid var(--trim-line); }
+#mini-panel iframe { width: 100%; height: 100%; border: 0; display: block; }
+/* While dragging anything, shield the iframes so they don't eat pointer events */
+#shell.shielded iframe { pointer-events: none; }
+
+/* ---------- Bottom widget dock ---------- */
+#dock { flex-shrink: 0; display: flex; flex-direction: column; }
+
+.panel { display: flex; flex-direction: column; background: var(--bg); }
+.panel-bar {
+  height: var(--panelbar-h); flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  background: var(--t-bg-2, #101014); border-top: 1px solid var(--trim-line);
+  cursor: grab; touch-action: none;
+}
+.panel-bar .grip { width: 34px; height: 4px; }
+.panel-title { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--sub); text-transform: uppercase; }
+.panel-spacer { flex: 1; }
+.panel-collapse {
+  background: transparent; border: none; color: var(--sub); font-size: 13px;
+  width: 30px; height: 26px; cursor: pointer; border-radius: 6px;
+}
+.panel-collapse:active { background: var(--panel-2); }
+.panel iframe { width: 100%; border: 0; display: block; flex: 1; min-height: 0; background: var(--t-bg-2, #101014); }
+.panel.collapsed iframe { display: none; }

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Y70 Dashboard</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="shell.css" />
+</head>
+<body>
+  <div id="shell">
+
+    <!-- Pull-down bar -->
+    <div id="topbar">
+      <div class="grip"></div>
+    </div>
+
+    <!-- Drawer (pulls down over the app) -->
+    <div id="drawer-backdrop" class="hidden"></div>
+    <div id="drawer">
+      <!-- ---- Main drawer view ---- -->
+      <div class="drawer-inner">
+        <div class="sec-title">Scenes</div>
+        <div class="tile-row" id="scene-row"></div>
+        <div class="scene-actions">
+          <button class="set-reset" id="scene-save">Save layout</button>
+          <button class="set-reset" id="scene-reset">Reset to packed</button>
+        </div>
+
+        <div class="sec-title">Apps</div>
+        <div class="tile-row" id="app-row">
+          <button class="tile app-tile active" data-app="spotify">
+            <span class="tile-ico" style="background:#1ed760;color:#000">♫</span>
+            <span>Spotify</span>
+          </button>
+          <button class="tile app-tile" data-app="weather">
+            <span class="tile-ico weather-ico">☀</span>
+            <span>Weather</span>
+          </button>
+        </div>
+        <div class="sec-title">Pull-up widgets<span class="sec-hint">drag ☰ to reorder · tap to toggle</span></div>
+        <div id="widget-list"></div>
+
+        <div class="sec-title">Settings</div>
+        <div class="tile-row">
+          <button class="tile" id="open-settings">
+            <span class="tile-ico trim-ico">⚙</span>
+            <span>Appearance</span>
+            <span class="tile-sub" id="theme-name"></span>
+          </button>
+        </div>
+        <div id="drawer-close"><span class="grip"></span></div>
+      </div>
+
+      <!-- ---- Settings view (swaps in over the drawer) ---- -->
+      <div class="settings-inner hidden" id="settings-view">
+        <div class="set-head">
+          <button class="set-back" id="settings-back" aria-label="Back">‹</button>
+          <div class="set-title">Appearance</div>
+          <div class="panel-spacer"></div>
+          <button class="set-reset" id="settings-reset">Reset</button>
+        </div>
+
+        <div class="set-scroll">
+          <div class="set-label">Presets</div>
+          <div class="preset-row" id="preset-row"></div>
+
+          <div class="set-label">Trim colour<span class="set-hint">shell chrome, dock, mini player</span></div>
+          <div class="swatches" data-slot="trim"></div>
+
+          <div class="set-label">Weather palette<span class="set-hint">weather app + widget</span></div>
+          <div class="swatches" data-slot="weather"></div>
+
+          <div class="set-label">Claude palette<span class="set-hint">usage widget</span></div>
+          <div class="swatches" data-slot="claude"></div>
+
+          <div class="set-label">PC stats palette<span class="set-hint">system widget</span></div>
+          <div class="swatches" data-slot="pc"></div>
+
+          <div class="set-label">Calculator palette</div>
+          <div class="swatches" data-slot="calc"></div>
+
+          <div class="set-label">Media palette<span class="set-hint">now playing + lyrics</span></div>
+          <div class="swatches" data-slot="media"></div>
+
+          <div class="set-label">Tools palette<span class="set-hint">audio, timer, notes</span></div>
+          <div class="swatches" data-slot="tools"></div>
+
+          <div class="set-label">Discord palette</div>
+          <div class="swatches" data-slot="discord"></div>
+
+          <div class="set-label">Background</div>
+          <div class="swatches" data-slot="bg"></div>
+
+          <label class="set-toggle">
+            <span>Tint weather backdrop<span class="set-hint">re-hues the animated sky</span></span>
+            <input type="checkbox" id="tint-bg" />
+          </label>
+        </div>
+
+        <div id="settings-close"><span class="grip"></span></div>
+      </div>
+    </div>
+
+    <!-- App area. Apps are kept mounted and toggled, never torn down, so audio
+         from a background app (Spotify) keeps playing. -->
+    <main id="appframe"></main>
+
+    <!-- Bottom widget dock -->
+    <div id="dock"></div>
+  </div>
+
+  <script src="shell.js"></script>
+</body>
+</html>

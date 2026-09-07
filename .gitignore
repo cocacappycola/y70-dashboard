@@ -1,0 +1,15 @@
+# Secrets — never commit these.
+claude-key.txt
+discord-app.json
+discord-token.json
+
+# Local state, not code.
+notes.txt
+
+# Dependencies (V2 app shell).
+node_modules/
+
+# Windows / editor noise.
+Thumbs.db
+desktop.ini
+*.log

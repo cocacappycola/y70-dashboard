@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Weather</title>
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="weather-app.css" />
+</head>
+<body>
+  <!-- Reactive background -->
+  <canvas id="bg-canvas"></canvas>
+  <div id="bg-tint"></div>
+
+  <div id="app">
+    <!-- ===== Header ===== -->
+    <header id="top">
+      <div class="place">
+        <div id="place-name">Locating…</div>
+        <div id="place-sub"></div>
+      </div>
+      <div class="spacer"></div>
+      <div id="aqi-badge" class="aqi-badge hidden">
+        <span id="aqi-dot" class="aqi-dot"></span>
+        <span><b id="aqi-num">—</b> AQI</span>
+      </div>
+      <button id="refresh" class="iconbtn" aria-label="Refresh">↻</button>
+    </header>
+
+    <div id="scroll">
+      <!-- ===== Current ===== -->
+      <section class="now-card">
+        <div class="now-main">
+          <div id="now-icon">🌡️</div>
+          <div id="now-temp">--°</div>
+          <div class="now-meta">
+            <div id="now-cond">Loading…</div>
+            <div id="now-feels"></div>
+            <div id="now-hilo"></div>
+          </div>
+        </div>
+        <div class="detail-grid">
+          <div class="det"><span class="d-l">Wind</span><span class="d-v" id="d-wind">—</span></div>
+          <div class="det"><span class="d-l">Humidity</span><span class="d-v" id="d-hum">—</span></div>
+          <div class="det"><span class="d-l">UV index</span><span class="d-v" id="d-uv">—</span></div>
+          <div class="det"><span class="d-l">Pressure</span><span class="d-v" id="d-pres">—</span></div>
+          <div class="det"><span class="d-l">Visibility</span><span class="d-v" id="d-vis">—</span></div>
+          <div class="det"><span class="d-l">Dew point</span><span class="d-v" id="d-dew">—</span></div>
+          <div class="det"><span class="d-l">Sunrise</span><span class="d-v" id="d-sunrise">—</span></div>
+          <div class="det"><span class="d-l">Sunset</span><span class="d-v" id="d-sunset">—</span></div>
+        </div>
+      </section>
+
+      <!-- ===== Hourly ===== -->
+      <section class="card">
+        <div class="card-title">Next 24 hours</div>
+        <div id="hourly" class="hourly"></div>
+      </section>
+
+      <!-- ===== Map ===== -->
+      <section class="card map-card">
+        <div class="card-title">
+          Radar &amp; overlays
+          <span class="spacer"></span>
+          <span id="map-status" class="map-status"></span>
+          <button id="map-base" class="map-base">Esri Dark</button>
+        </div>
+        <div id="map">
+          <div id="map-world"></div>
+          <canvas id="map-fx"></canvas>
+          <div id="map-attr">© Esri · RainViewer</div>
+          <div id="map-zoom">
+            <button id="zoom-in" aria-label="Zoom in">+</button>
+            <button id="zoom-out" aria-label="Zoom out">−</button>
+            <button id="recenter" aria-label="Recenter">◎</button>
+          </div>
+          <div id="map-legend" class="hidden"></div>
+        </div>
+        <div class="overlay-row">
+          <button class="ov-btn on" data-ov="rain"><span class="ov-ico">🌧️</span>Rain</button>
+          <button class="ov-btn" data-ov="wind"><span class="ov-ico">💨</span>Wind</button>
+          <button class="ov-btn" data-ov="aqi"><span class="ov-ico">🫁</span>AQI</button>
+        </div>
+      </section>
+
+      <!-- ===== Air quality ===== -->
+      <section class="card">
+        <div class="card-title">Air quality</div>
+        <div id="aq-head" class="aq-head">
+          <div id="aq-big">—</div>
+          <div>
+            <div id="aq-label" class="aq-label">Loading…</div>
+            <div id="aq-desc" class="aq-desc"></div>
+          </div>
+        </div>
+        <div id="aq-scale" class="aq-scale"><div id="aq-marker" class="aq-marker"></div></div>
+        <div id="pollutants" class="pollutants"></div>
+      </section>
+
+      <!-- ===== Daily ===== -->
+      <section class="card">
+        <div class="card-title">7-day forecast</div>
+        <div id="daily" class="daily"></div>
+      </section>
+
+      <div class="foot">Open-Meteo · RainViewer · no API keys, no cost</div>
+    </div>
+  </div>
+
+  <script src="/config.js"></script>
+  <script src="/weather-bg.js"></script>
+  <script src="weather-app.js"></script>
+</body>
+</html>

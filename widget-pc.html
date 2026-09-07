@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PC stats</title>
+  <script src="/theme.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--p-grad, #12211f) 0%, var(--p-bg, #101014) 60%);
+      color: var(--p-text, #eef5f3);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 16px 8px; gap: 6px; }
+
+    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .chip {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--p-accent, #42d6c3); color: var(--p-accent-ink, #000);
+      display: flex; align-items: center; justify-content: center; font-size: 13px;
+    }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--p-sub, #93a8a4); }
+    .spacer { flex: 1; }
+    #cpuname {
+      font-size: 10px; color: var(--p-muted, #6d7f7c); white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; max-width: 46%;
+    }
+
+    /* Hero: RAM */
+    .hero { display: flex; align-items: baseline; gap: 14px; flex-shrink: 0; }
+    #hero-pct { font-size: clamp(26px, 6vw, 42px); font-weight: 200; letter-spacing: -.02em; line-height: 1; }
+    .hero-sub { font-size: 12px; color: var(--p-sub, #93a8a4); }
+    .hero-sub b { color: var(--p-text, #eef5f3); font-weight: 600; }
+
+    /* Stat tiles */
+    .tiles { display: flex; gap: 8px; flex-shrink: 0; }
+    .tile {
+      flex: 1; background: var(--p-card, rgba(255,255,255,.045));
+      border: 1px solid var(--p-card-line, transparent);
+      border-radius: 8px; padding: 6px 10px; min-width: 0;
+    }
+    .tile .t-v { font-size: 15px; font-weight: 600; white-space: nowrap; }
+    .tile .t-v.off { color: var(--p-muted, #6d7f7c); font-weight: 400; }
+    .tile .t-l {
+      font-size: 9.5px; color: var(--p-sub, #93a8a4); text-transform: uppercase;
+      letter-spacing: .06em; margin-top: 1px; white-space: nowrap;
+    }
+
+    /* History: one sparkline per tile, drawn behind the number. */
+    .tile { position: relative; overflow: hidden; }
+    .tile canvas { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 58%; opacity: .5; }
+    .tile .t-v, .tile .t-l { position: relative; }
+
+    /* Per-core strip — one bar per logical processor. */
+    .cores { display: flex; gap: 2px; align-items: flex-end; height: 22px; flex-shrink: 0; }
+    .cores i {
+      flex: 1; min-width: 0; background: var(--p-accent-dim, #2b4a46); border-radius: 2px 2px 0 0;
+      height: 4%; transition: height .35s ease, background .35s ease;
+    }
+    .cores i.hot { background: var(--p-accent, #42d6c3); }
+    .cores-label { font-size: 9px; color: var(--p-muted, #6d7f7c); flex-shrink: 0; margin-top: -2px; }
+
+    /* Network throughput */
+    .net {
+      display: flex; align-items: center; gap: 16px; flex-shrink: 0;
+      background: var(--p-card, rgba(255,255,255,.045));
+      border: 1px solid var(--p-card-line, transparent);
+      border-radius: 10px; padding: 8px 12px;
+    }
+    .net-one { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+    .net-arrow { font-size: 13px; color: var(--p-accent, #42d6c3); font-weight: 700; }
+    .net-v { font-size: clamp(14px, 3vw, 20px); font-weight: 600; letter-spacing: -.01em; white-space: nowrap; }
+    .net-u { font-size: 10px; color: var(--p-sub, #93a8a4); }
+    #conn-total { font-size: 10px; color: var(--p-sub, #93a8a4); white-space: nowrap; }
+
+    /* Live process list */
+    .list-head {
+      display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+      font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--p-sub, #93a8a4); margin-top: 2px;
+    }
+    #list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    #list::-webkit-scrollbar { width: 5px; height: 5px; }
+    #list::-webkit-scrollbar-thumb { background: var(--p-accent-dim, #2b4a46); border-radius: 3px; }
+    #list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    .row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--p-card-line, rgba(255,255,255,.05));
+    }
+    .row:last-child { border-bottom: 0; }
+    .r-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+    .r-host { font-size: 9.5px; color: var(--p-muted, #6d7f7c); font-weight: 400; margin-left: 6px; }
+    .r-conns {
+      font-size: 9.5px; color: var(--p-sub, #93a8a4); flex-shrink: 0;
+      background: var(--p-accent-soft, rgba(255,255,255,.07));
+      border-radius: 999px; padding: 2px 7px; white-space: nowrap;
+    }
+    .r-rate {
+      font-size: 11px; font-variant-numeric: tabular-nums; text-align: right;
+      width: 74px; flex-shrink: 0; color: var(--p-sub, #93a8a4);
+    }
+    .row.busy .r-rate { color: var(--p-accent, #42d6c3); font-weight: 700; }
+
+    .foot { flex-shrink: 0; font-size: 9.5px; color: var(--p-muted, #6d7f7c); }
+    #msg { flex: 1; display: flex; align-items: center; color: var(--p-sub, #93a8a4); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">▣</div>
+      <div class="label">PC stats</div>
+      <div class="spacer"></div>
+      <div id="cpuname"></div>
+    </div>
+
+    <div id="content" style="display:none; flex:1; min-height:0; flex-direction:column; gap:6px;">
+      <div class="hero">
+        <div id="hero-pct">—</div>
+        <div class="hero-sub">RAM · <b id="hero-ram"></b></div>
+      </div>
+
+      <div class="tiles">
+        <div class="tile"><canvas data-series="cpu"></canvas><div class="t-v" id="t-cpu">—</div><div class="t-l">CPU</div></div>
+        <div class="tile"><canvas data-series="cpuTemp"></canvas><div class="t-v" id="t-cput">—</div><div class="t-l">CPU temp</div></div>
+        <div class="tile"><canvas data-series="gpuTemp"></canvas><div class="t-v" id="t-gput">—</div><div class="t-l">GPU temp</div></div>
+        <div class="tile"><canvas data-series="gpu"></canvas><div class="t-v" id="t-gpu">—</div><div class="t-l">GPU</div></div>
+        <div class="tile"><canvas data-series="ram"></canvas><div class="t-v" id="t-vram">—</div><div class="t-l">VRAM</div></div>
+      </div>
+
+      <div class="cores" id="cores"></div>
+      <div class="cores-label" id="cores-label"></div>
+
+      <div class="net">
+        <div class="net-one">
+          <span class="net-arrow">↓</span>
+          <span class="net-v" id="net-down">—</span><span class="net-u" id="net-down-u"></span>
+        </div>
+        <div class="net-one">
+          <span class="net-arrow">↑</span>
+          <span class="net-v" id="net-up">—</span><span class="net-u" id="net-up-u"></span>
+        </div>
+        <div class="spacer"></div>
+        <div id="conn-total"></div>
+      </div>
+
+      <div class="list-head">
+        <span>Network activity</span>
+        <span class="spacer"></span>
+        <span id="list-note"></span>
+      </div>
+      <div id="list"></div>
+    </div>
+
+    <div id="msg" style="display:none">Starting the sampler…</div>
+    <div class="foot" id="foot">live · nothing leaves this machine</div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+
+    // Rates are shown per second; sizes in the nearest sensible unit.
+    function rate(bps) {
+      if (bps >= 1048576) return [(bps / 1048576).toFixed(bps >= 10485760 ? 0 : 1), " MB/s"];
+      if (bps >= 1024) return [(bps / 1024).toFixed(bps >= 10240 ? 0 : 1), " KB/s"];
+      return [String(Math.round(bps)), " B/s"];
+    }
+    const gb = (mb) => (mb / 1024).toFixed(mb >= 10240 ? 0 : 1) + " GB";
+
+    let lastOk = 0;
+
+    async function load() {
+      try {
+        const res = await fetch("/api/pcstats");
+        const d = await res.json();
+        if (!d.ok) throw new Error(d.error || "not ok");
+
+        // RAM and CPU% are available immediately; the rest arrives once the
+        // sampler has produced two samples to difference.
+        $("content").style.display = "flex";
+        $("msg").style.display = "none";
+
+        $("hero-pct").textContent = Math.round(d.ram.pct) + "%";
+        $("hero-ram").textContent = gb(d.ram.usedMB) + " of " + gb(d.ram.totalMB);
+        $("cpuname").textContent =
+          (d.cpu.name || "").replace(/\(R\)|\(TM\)|CPU|Processor|[0-9]+-Core/gi, "").replace(/\s+/g, " ").trim() +
+          (d.cpu.cores ? " · " + d.cpu.cores + "t" : "");
+
+        set("t-cpu", d.cpu.pct == null ? null : Math.round(d.cpu.pct) + "%");
+        set("t-cput", d.cpu.tempC == null ? null : Math.round(d.cpu.tempC) + "°");
+        set("t-gput", d.gpu ? Math.round(d.gpu.temp) + "°" : null);
+        set("t-gpu", d.gpu ? Math.round(d.gpu.util) + "%" : null);
+        set("t-vram", d.gpu ? gb(d.gpu.memUsed) : null);
+
+        if (d.net) {
+          const dn = rate(d.net.downBps), up = rate(d.net.upBps);
+          $("net-down").textContent = dn[0]; $("net-down-u").textContent = dn[1];
+          $("net-up").textContent = up[0];   $("net-up-u").textContent = up[1];
+          $("conn-total").textContent = d.connTotal + " connections";
+        }
+
+        drawSparks(d.history || {});
+        drawCores(d.cpu.perCore || []);
+        renderList(d.talkers || [], d.busiest || []);
+        foot(d);
+        lastOk = Date.now();
+      } catch (e) {
+        // Keep the last good numbers on screen; just say they are stale.
+        if (!lastOk) {
+          $("content").style.display = "none";
+          $("msg").style.display = "flex";
+          $("msg").textContent = "Can't reach the local server.";
+        } else {
+          $("foot").textContent = "stale — can't reach the local server";
+        }
+      }
+    }
+
+    // ---- History ------------------------------------------------------------
+    // Each tile carries its own sparkline of the same series the number came
+    // from, so the value on screen is always the right-hand end of the line.
+    const accent = () => getComputedStyle(document.documentElement).getPropertyValue("--p-accent").trim() || "#42d6c3";
+    function drawSparks(h) {
+      for (const c of document.querySelectorAll(".tile canvas")) {
+        const key = c.dataset.series;
+        const raw = h[key] || [];
+        const pts = raw.filter((v) => v != null);
+        const r = window.devicePixelRatio || 1;
+        const w = c.clientWidth, ht = c.clientHeight;
+        if (!w || !ht) continue;
+        if (c.width !== Math.round(w * r)) { c.width = Math.round(w * r); c.height = Math.round(ht * r); }
+        const g = c.getContext("2d");
+        g.setTransform(r, 0, 0, r, 0, 0);
+        g.clearRect(0, 0, w, ht);
+        if (pts.length < 2) continue;
+        // Percentages share a 0-100 frame; temperatures get their own range so
+        // a flat 55°C still reads as a line rather than a floor.
+        const pct = key === "cpu" || key === "gpu" || key === "ram";
+        let lo = pct ? 0 : Math.min(...pts) - 2;
+        let hi = pct ? 100 : Math.max(...pts) + 2;
+        if (hi - lo < 1) hi = lo + 1;
+        const x = (i) => (i / (raw.length - 1)) * w;
+        const y = (v) => ht - ((v - lo) / (hi - lo)) * (ht - 2) - 1;
+        g.beginPath();
+        let started = false;
+        raw.forEach((v, i) => {
+          if (v == null) return;
+          if (!started) { g.moveTo(x(i), y(v)); started = true; } else g.lineTo(x(i), y(v));
+        });
+        const col = accent();
+        g.strokeStyle = col; g.lineWidth = 1.4; g.lineJoin = "round"; g.stroke();
+        g.lineTo(w, ht); g.lineTo(0, ht); g.closePath();
+        g.globalAlpha = 0.22; g.fillStyle = col; g.fill(); g.globalAlpha = 1;
+      }
+    }
+
+    function drawCores(cores) {
+      const box = $("cores");
+      if (!cores.length) { box.style.display = "none"; $("cores-label").textContent = ""; return; }
+      box.style.display = "flex";
+      if (box.children.length !== cores.length) {
+        box.innerHTML = "";
+        for (let i = 0; i < cores.length; i++) box.appendChild(document.createElement("i"));
+      }
+      cores.forEach((v, i) => {
+        const bar = box.children[i];
+        bar.style.height = Math.max(4, v) + "%";
+        bar.classList.toggle("hot", v >= 70);
+      });
+      const busy = cores.filter((v) => v >= 70).length;
+      $("cores-label").textContent = cores.length + " threads · " +
+        (busy ? busy + " over 70%" : "all under 70%");
+    }
+
+    function set(id, v) {
+      const el = $(id);
+      el.textContent = v == null ? "—" : v;
+      el.classList.toggle("off", v == null);
+    }
+
+    function renderList(talkers, busiest) {
+      const list = $("list");
+      // Processes holding a socket come first; anything busy on disk without a
+      // connection is appended so the list is never empty on an idle machine.
+      const seen = new Set(talkers.map((t) => t.name));
+      const rows = talkers.concat(
+        busiest.filter((b) => !seen.has(b.name)).map((b) => ({ ...b, conns: 0, hosts: 0, sample: "" })));
+
+      if (!rows.length) { list.innerHTML = '<div class="row"><span class="r-name">Nothing talking right now.</span></div>'; return; }
+
+      list.innerHTML = rows.map((t) => {
+        const r = rate(t.ioBps);
+        return '<div class="row' + (t.ioBps > 65536 ? " busy" : "") + '">' +
+          '<span class="r-name">' + esc(t.name) +
+            (t.sample ? '<span class="r-host">' + esc(t.sample) + "</span>" : "") + "</span>" +
+          (t.conns ? '<span class="r-conns">' + t.conns + (t.hosts > 1 ? " · " + t.hosts + " hosts" : "") + "</span>" : "") +
+          '<span class="r-rate">' + r[0] + r[1] + "</span>" +
+          "</div>";
+      }).join("");
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    }
+
+    function foot(d) {
+      if (d.warming) { $("foot").textContent = "sampling…"; return; }
+      // Windows publishes no CPU die temperature on most desktops (AMD in
+      // particular), so say what would make the tile light up.
+      if (d.cpu.tempC == null) {
+        $("foot").textContent = "CPU temp needs LibreHardwareMonitor running as admin · everything else is live";
+      } else {
+        $("foot").textContent = "CPU temp via " + d.cpu.tempSrc + " · live, nothing leaves this machine";
+      }
+      $("list-note").textContent = "per-process I/O";
+    }
+
+    load();
+    let timer = setInterval(load, 2000);
+    // Stop polling when the dashboard is hidden — the server shuts the sampler
+    // down on its own once nothing has asked for 60s.
+    document.addEventListener("visibilitychange", () => {
+      clearInterval(timer);
+      if (!document.hidden) { load(); timer = setInterval(load, 2000); }
+    });
+  </script>
+</body>
+</html>

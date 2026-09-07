@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Notes</title>
+  <script src="/theme.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--u-grad, #22200f) 0%, var(--u-bg, #101014) 60%);
+      color: var(--u-text, #f5f2e6);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 12px 8px; gap: 6px; }
+    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; user-select: none; }
+    .chip {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--u-accent, #e8d44d); color: var(--u-accent-ink, #000);
+      display: flex; align-items: center; justify-content: center; font-size: 12px;
+    }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--u-sub, #b0aa8e); }
+    .spacer { flex: 1; }
+    #status { font-size: 9.5px; color: var(--u-muted, #7d7960); white-space: nowrap; }
+    .btn {
+      background: var(--u-card, rgba(255,255,255,.05));
+      border: 1px solid var(--u-card-line, rgba(255,255,255,.1));
+      color: var(--u-sub, #b0aa8e); border-radius: 8px; padding: 5px 10px;
+      font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    .btn:active { background: var(--u-surface-2, rgba(255,255,255,.13)); }
+
+    #pad {
+      flex: 1; min-height: 0; width: 100%; resize: none;
+      background: var(--u-card, rgba(255,255,255,.04));
+      border: 1px solid var(--u-card-line, rgba(255,255,255,.09));
+      border-radius: 10px; padding: 10px 12px;
+      color: var(--u-text, #f5f2e6); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+      font-size: 13px; line-height: 1.55; outline: none;
+      -webkit-user-select: text; user-select: text;
+    }
+    #pad:focus { border-color: var(--u-accent-line, rgba(232,212,77,.45)); }
+    #pad::-webkit-scrollbar { width: 6px; height: 6px; }
+    #pad::-webkit-scrollbar-thumb { background: var(--u-accent-dim, #4a4630); border-radius: 3px; }
+    #pad::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    #pad::placeholder { color: var(--u-muted, #7d7960); }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">✎</div>
+      <div class="label">Notes</div>
+      <div class="spacer"></div>
+      <div id="status">…</div>
+      <button class="btn" id="stamp">＋ date</button>
+    </div>
+    <textarea id="pad" placeholder="Type anything. It saves itself to notes.txt in the dashboard folder." spellcheck="false"></textarea>
+  </div>
+
+  <script>
+    const pad = document.getElementById("pad");
+    const status = document.getElementById("status");
+    let saved = "";        // what the server currently holds
+    let saveTimer = null;
+    let loaded = false;
+
+    function setStatus(s) { status.textContent = s; }
+
+    async function load() {
+      try {
+        const d = await (await fetch("/api/notes")).json();
+        // Never clobber something the user has already started typing.
+        if (!loaded || (pad.value === saved && d.text !== saved)) {
+          const keepStart = pad.selectionStart, keepEnd = pad.selectionEnd;
+          pad.value = d.text || "";
+          if (loaded) { try { pad.setSelectionRange(keepStart, keepEnd); } catch (e) {} }
+        }
+        saved = d.text || "";
+        loaded = true;
+        setStatus(saved ? "saved" : "empty");
+      } catch (e) {
+        setStatus("offline");
+      }
+    }
+
+    async function save() {
+      const text = pad.value;
+      if (text === saved) { setStatus("saved"); return; }
+      setStatus("saving…");
+      try {
+        const r = await (await fetch("/api/notes", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        })).json();
+        if (r.ok) { saved = text; setStatus("saved"); }
+        else setStatus("save failed");
+      } catch (e) { setStatus("offline — not saved"); }
+    }
+
+    // Debounced so a burst of typing costs one write, with a hard flush on blur
+    // and on the way out so nothing is lost if the panel is closed mid-sentence.
+    pad.addEventListener("input", () => {
+      setStatus("editing…");
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(save, 800);
+    });
+    pad.addEventListener("blur", () => { clearTimeout(saveTimer); save(); });
+    window.addEventListener("pagehide", () => {
+      if (pad.value === saved) return;
+      // Fire-and-forget on teardown; fetch would be cancelled.
+      try {
+        navigator.sendBeacon("/api/notes", new Blob([JSON.stringify({ text: pad.value })], { type: "application/json" }));
+      } catch (e) {}
+    });
+
+    document.getElementById("stamp").addEventListener("pointerup", () => {
+      const d = new Date();
+      const stamp = d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) +
+        " " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const at = pad.selectionStart ?? pad.value.length;
+      const pre = pad.value.slice(0, at), post = pad.value.slice(at);
+      const insert = (pre && !pre.endsWith("\n") ? "\n" : "") + "— " + stamp + "\n";
+      pad.value = pre + insert + post;
+      pad.focus();
+      pad.setSelectionRange(pre.length + insert.length, pre.length + insert.length);
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(save, 400);
+    });
+
+    load();
+    // Picks up edits made in an editor, but only while you are not typing.
+    setInterval(() => { if (document.activeElement !== pad) load(); }, 10000);
+  </script>
+</body>
+</html>

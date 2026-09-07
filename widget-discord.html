@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Discord</title>
+  <script src="/theme.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--d-grad, #1b1d2b) 0%, var(--d-bg, #101014) 60%);
+      color: var(--d-text, #eef0f7);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 14px 8px; gap: 8px; }
+    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .chip {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--d-accent, #5865f2); color: var(--d-accent-ink, #fff);
+      display: flex; align-items: center; justify-content: center; font-size: 12px;
+    }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--d-sub, #a0a5bd); }
+    .spacer { flex: 1; }
+    #who { font-size: 10px; color: var(--d-muted, #6c7189); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+
+    /* ---- The two buttons this widget exists for ---- */
+    .big { display: flex; gap: 8px; flex-shrink: 0; }
+    .bg-btn {
+      flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+      background: var(--d-card, rgba(255,255,255,.05));
+      border: 1px solid var(--d-card-line, rgba(255,255,255,.1));
+      border-radius: 12px; padding: 11px 13px; cursor: pointer; min-height: 58px;
+      color: inherit; font-family: inherit; text-align: left;
+    }
+    .bg-btn:active { background: var(--d-surface-2, rgba(255,255,255,.12)); }
+    .bg-btn .b-top { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .bg-btn .b-sub { font-size: 9.5px; color: var(--d-muted, #6c7189); }
+    .bg-btn .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--d-accent, #5865f2); }
+    /* Red is reserved for "you are silenced" — never for anything else. */
+    .bg-btn.on { background: rgba(237,66,69,.18); border-color: rgba(237,66,69,.6); color: #ffdada; }
+    .bg-btn.on .dot { background: #ed4245; }
+    .bg-btn.on .b-sub { color: #ffb3b3; }
+    .bg-btn:disabled { opacity: .4; cursor: default; }
+
+    /* ---- Voice channel ---- */
+    .ch {
+      flex-shrink: 0; font-size: 11.5px; color: var(--d-sub, #a0a5bd);
+      display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden;
+    }
+    .ch b { color: var(--d-text, #fff); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+    #members { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 3px; }
+    #members::-webkit-scrollbar { width: 5px; }
+    #members::-webkit-scrollbar-thumb { background: var(--d-accent-dim, #333a66); border-radius: 3px; }
+    #members::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    .mem { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 4px 6px; border-radius: 7px; }
+    .mem .av {
+      width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+      background: var(--d-surface-2, #2a2e42); display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; color: var(--d-sub, #a0a5bd);
+      border: 2px solid transparent; transition: border-color .1s linear;
+    }
+    /* A green ring exactly like Discord's own speaking indicator. */
+    .mem.speaking .av { border-color: #3ba55d; }
+    .mem.speaking .m-name { color: var(--d-text, #fff); }
+    .mem .m-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--d-sub, #a0a5bd); }
+    .mem.me .m-name { font-weight: 700; }
+    .mem .m-icon { font-size: 11px; color: #ed4245; flex-shrink: 0; }
+
+    /* ---- Setup / status panel ---- */
+    #panel { flex: 1; min-height: 0; overflow-y: auto; font-size: 12px; line-height: 1.6; color: var(--d-sub, #a0a5bd); }
+    #panel::-webkit-scrollbar { width: 5px; }
+    #panel::-webkit-scrollbar-thumb { background: var(--d-accent-dim, #333a66); border-radius: 3px; }
+    #panel h4 { margin: 0 0 6px; font-size: 12px; color: var(--d-text, #fff); }
+    #panel ol { margin: 0; padding-left: 18px; }
+    #panel li { margin-bottom: 5px; }
+    #panel code {
+      background: var(--d-card, rgba(255,255,255,.07)); border-radius: 4px; padding: 1px 5px;
+      font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--d-text, #fff);
+      user-select: text;
+    }
+    .act {
+      background: var(--d-accent, #5865f2); color: var(--d-accent-ink, #fff); border: none;
+      border-radius: 9px; padding: 10px 16px; font-size: 13px; font-weight: 700;
+      cursor: pointer; font-family: inherit; margin-top: 8px;
+    }
+    .act:active { background: var(--d-accent-dim, #333a66); }
+    .act.ghost { background: transparent; border: 1px solid var(--d-card-line, rgba(255,255,255,.14)); color: var(--d-sub, #a0a5bd); font-weight: 600; }
+    .err { color: #ff9d9d; font-size: 11px; margin-top: 6px; }
+    .foot { flex-shrink: 0; font-size: 9px; color: var(--d-muted, #6c7189); }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">◉</div>
+      <div class="label">Discord</div>
+      <div class="spacer"></div>
+      <div id="who"></div>
+    </div>
+
+    <div id="live" style="display:none; flex:1; min-height:0; flex-direction:column; gap:8px;">
+      <div class="big">
+        <button class="bg-btn" id="b-mute">
+          <span class="b-top"><span class="dot"></span><span id="mute-t">Mic on</span></span>
+          <span class="b-sub" id="mute-s">tap to mute yourself</span>
+        </button>
+        <button class="bg-btn" id="b-deaf">
+          <span class="b-top"><span class="dot"></span><span id="deaf-t">Sound on</span></span>
+          <span class="b-sub" id="deaf-s">tap to deafen</span>
+        </button>
+      </div>
+      <div class="ch" id="ch"></div>
+      <div id="members"></div>
+    </div>
+
+    <div id="panel"></div>
+    <div class="foot" id="foot"></div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+    let st = null, busy = false;
+
+    async function post(action, args) {
+      busy = true;
+      try {
+        const r = await fetch("/api/discord", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, args: args || {} }),
+        });
+        const d = await r.json();
+        if (d.status) { st = d.status; render(); }
+        return d;
+      } catch (e) { return { ok: false, error: e.message }; }
+      finally { busy = false; }
+    }
+
+    async function poll() {
+      if (busy) return;
+      try { st = await (await fetch("/api/discord")).json(); render(); }
+      catch (e) { $("panel").textContent = "Can't reach the local server."; }
+    }
+
+    function render() {
+      if (!st) return;
+      const live = st.authed && st.voice;
+      $("live").style.display = live ? "flex" : "none";
+      $("panel").style.display = live ? "none" : "block";
+      $("who").textContent = st.user ? "@" + st.user.name : "";
+      if (live) renderLive(); else renderPanel();
+    }
+
+    function renderLive() {
+      const v = st.voice;
+      const m = $("b-mute"), d = $("b-deaf");
+      m.classList.toggle("on", v.mute);
+      d.classList.toggle("on", v.deaf);
+      $("mute-t").textContent = v.mute ? "Muted" : "Mic on";
+      $("mute-s").textContent = v.mute ? "nobody can hear you" : "tap to mute yourself";
+      $("deaf-t").textContent = v.deaf ? "Deafened" : "Sound on";
+      $("deaf-s").textContent = v.deaf ? "you can't hear anyone" : "tap to deafen";
+
+      const ch = st.channel;
+      $("ch").innerHTML = ch
+        ? '<span>\u{1F50A}</span><b></b><span style="opacity:.6">· ' + ch.members.length + '</span>'
+        : '<span style="opacity:.6">Not in a voice channel</span>';
+      if (ch) $("ch").querySelector("b").textContent = ch.name || "voice";
+
+      const box = $("members");
+      const members = ch ? ch.members : [];
+      const sig = members.map((x) => x.id).join("|");
+      if (box.dataset.sig !== sig) {
+        box.dataset.sig = sig;
+        box.innerHTML = "";
+        for (const p of members) {
+          const el = document.createElement("div");
+          el.className = "mem" + (p.me ? " me" : "");
+          el.dataset.id = p.id;
+          el.innerHTML = '<span class="av"></span><span class="m-name"></span><span class="m-icon"></span>';
+          el.querySelector(".av").textContent = (p.name || "?").slice(0, 2).toUpperCase();
+          el.querySelector(".m-name").textContent = p.name + (p.me ? "  (you)" : "");
+          box.appendChild(el);
+        }
+      }
+      for (const p of members) {
+        const el = box.querySelector('.mem[data-id="' + p.id + '"]');
+        if (!el) continue;
+        el.classList.toggle("speaking", !!p.speaking);
+        el.querySelector(".m-icon").textContent = p.deaf ? "\u{1F507}" : (p.mute ? "\u{1F494}".replace("\u{1F494}", "\u{1F507}") : "");
+        if (p.mute && !p.deaf) el.querySelector(".m-icon").textContent = "\u{1F507}";
+      }
+      $("foot").textContent = "live from Discord · mute state is the real one";
+    }
+
+    function renderPanel() {
+      const p = $("panel");
+      $("foot").textContent = "";
+      if (!st.configured) {
+        p.innerHTML =
+          "<h4>One-time setup</h4><ol>" +
+          "<li>Open <code>discord.com/developers/applications</code> and hit <b>New Application</b>. Name it anything.</li>" +
+          "<li>On <b>OAuth2</b>, copy the <b>Client ID</b> and reveal the <b>Client Secret</b>.</li>" +
+          "<li>Still on OAuth2, add the redirect <code>" + st.redirectUri + "</code> and save.</li>" +
+          "<li>Create <code>discord-app.json</code> in the dashboard folder:<br>" +
+          '<code>{"clientId":"…","clientSecret":"…"}</code></li>' +
+          "<li>Restart the server, then come back here.</li>" +
+          "</ol>" +
+          '<div class="err">You must be the application’s <b>owner</b> — that is what lets it use the ' +
+          "<code>rpc</code> scopes without Discord whitelisting it.</div>";
+        return;
+      }
+      if (!st.hasSecret) {
+        p.innerHTML = "<h4>Client secret missing</h4>Add <code>clientSecret</code> to " +
+          "<code>discord-app.json</code> and restart the server. The one-time code Discord " +
+          "hands back can only be exchanged for a token with it.";
+        return;
+      }
+      if (!st.connected) {
+        p.innerHTML = "<h4>Discord isn’t reachable</h4>" +
+          "Make sure the <b>desktop app</b> is running — the browser version has no local " +
+          "socket to talk to." +
+          (st.error ? '<div class="err">' + esc(st.error) + "</div>" : "") +
+          '<button class="act ghost" id="b-retry">Try again</button>';
+        $("b-retry").addEventListener("pointerup", () => post("reconnect"));
+        return;
+      }
+      p.innerHTML = "<h4>Ready to link</h4>" +
+        "Tap below, then <b>approve the popup inside Discord</b>. It asks for " +
+        "<code>rpc.voice.read</code> and <code>rpc.voice.write</code> — read and change your own " +
+        "voice settings. Nothing is sent anywhere; the token stays in this folder." +
+        (st.error ? '<div class="err">' + esc(st.error) + "</div>" : "") +
+        '<button class="act" id="b-auth">' + (st.authorizing ? "Waiting for approval…" : "Link Discord") + "</button>" +
+        (st.authed ? "" : ' <button class="act ghost" id="b-forget">Forget token</button>');
+      const a = $("b-auth");
+      if (a) a.addEventListener("pointerup", async () => {
+        a.textContent = "Approve it in Discord…";
+        const r = await post("authorize");
+        if (!r.ok) { a.textContent = "Link Discord"; }
+      });
+      const f = $("b-forget");
+      if (f) f.addEventListener("pointerup", () => post("forget"));
+    }
+
+    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+    $("b-mute").addEventListener("pointerup", () => {
+      if (!st || !st.voice) return;
+      $("b-mute").classList.toggle("on", !st.voice.mute);   // optimistic
+      post("toggleMute");
+    });
+    $("b-deaf").addEventListener("pointerup", () => {
+      if (!st || !st.voice) return;
+      $("b-deaf").classList.toggle("on", !st.voice.deaf);
+      post("toggleDeaf");
+    });
+
+    poll();
+    let timer = setInterval(poll, 1000);
+    document.addEventListener("visibilitychange", () => {
+      clearInterval(timer);
+      if (!document.hidden) { poll(); timer = setInterval(poll, 1000); }
+    });
+  </script>
+</body>
+</html>

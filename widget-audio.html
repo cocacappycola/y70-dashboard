@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audio</title>
+  <script src="/theme.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--u-grad, #22200f) 0%, var(--u-bg, #101014) 60%);
+      color: var(--u-text, #f5f2e6);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 14px 8px; gap: 7px; }
+    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .chip {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--u-accent, #e8d44d); color: var(--u-accent-ink, #000);
+      display: flex; align-items: center; justify-content: center; font-size: 13px;
+    }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--u-sub, #b0aa8e); }
+    .spacer { flex: 1; }
+    .sec {
+      font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--u-sub, #b0aa8e); flex-shrink: 0;
+    }
+
+    /* ---- Big mute buttons ---- */
+    .toggles { display: flex; gap: 8px; flex-shrink: 0; }
+    .tg {
+      flex: 1; display: flex; align-items: center; gap: 9px; min-width: 0;
+      background: var(--u-card, rgba(255,255,255,.05));
+      border: 1px solid var(--u-card-line, rgba(255,255,255,.1));
+      border-radius: 11px; padding: 9px 12px; cursor: pointer;
+      color: inherit; font-family: inherit; font-size: 13px; font-weight: 600;
+      text-align: left;
+    }
+    .tg:active { background: var(--u-surface-2, rgba(255,255,255,.12)); }
+    .tg .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--u-accent, #e8d44d); flex-shrink: 0; }
+    .tg .t-sub { font-size: 9.5px; font-weight: 500; color: var(--u-muted, #7d7960); display: block; margin-top: 1px;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* Muted is the state you must never misread on a glance. */
+    .tg.muted { background: rgba(255,68,68,.16); border-color: rgba(255,90,90,.55); color: #ffd9d9; }
+    .tg.muted .dot { background: #ff5a5a; }
+    .tg.muted .t-sub { color: #ffb0b0; }
+    .tg .t-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ---- Master volume ---- */
+    .master { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .master .mv { font-size: 12px; color: var(--u-sub, #b0aa8e); width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
+    input[type=range] {
+      -webkit-appearance: none; appearance: none; flex: 1; height: 22px; background: transparent; margin: 0;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 6px; border-radius: 3px;
+      background: linear-gradient(to right, var(--u-accent, #e8d44d) var(--fill, 50%), var(--u-surface-2, #33312a) var(--fill, 50%));
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+      background: var(--u-text, #fff); margin-top: -6px;
+    }
+
+    /* ---- Output list ---- */
+    #outs { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 4px; }
+    #outs::-webkit-scrollbar { width: 5px; height: 5px; }
+    #outs::-webkit-scrollbar-thumb { background: var(--u-accent-dim, #4a4630); border-radius: 3px; }
+    #outs::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    .dev {
+      display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 9px;
+      background: var(--u-card, rgba(255,255,255,.04));
+      border: 1px solid transparent; cursor: pointer; font-size: 12.5px; min-height: 40px;
+    }
+    .dev:active { background: var(--u-surface-2, rgba(255,255,255,.1)); }
+    .dev.on { border-color: var(--u-accent, #e8d44d); background: var(--u-accent-soft, rgba(232,212,77,.14)); font-weight: 600; }
+    .dev .d-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dev .d-mark { color: var(--u-accent, #e8d44d); font-size: 13px; flex-shrink: 0; }
+    /* A live level bar on the active device — instant proof sound is flowing. */
+    .meter { width: 34px; height: 5px; border-radius: 3px; background: var(--u-surface-2, #33312a); overflow: hidden; flex-shrink: 0; }
+    .meter i { display: block; height: 100%; width: 0%; background: var(--u-accent, #e8d44d); transition: width .12s linear; }
+
+    /* ---- Per-app mixer ---- */
+    #mix { flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; max-height: 34%; overflow-y: auto; }
+    #mix::-webkit-scrollbar { width: 5px; }
+    #mix::-webkit-scrollbar-thumb { background: var(--u-accent-dim, #4a4630); border-radius: 3px; }
+    #mix::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    .app { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .app .a-name { width: 74px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+    .app.off .a-name { color: var(--u-muted, #7d7960); text-decoration: line-through; }
+    .app .a-mute {
+      background: transparent; border: 1px solid var(--u-card-line, rgba(255,255,255,.12));
+      color: var(--u-sub, #b0aa8e); border-radius: 6px; width: 28px; height: 24px;
+      font-size: 12px; cursor: pointer; flex-shrink: 0; font-family: inherit;
+    }
+    .app.off .a-mute { background: rgba(255,68,68,.2); border-color: rgba(255,90,90,.5); color: #ffb0b0; }
+    .app .a-pct { width: 32px; text-align: right; font-size: 10px; color: var(--u-muted, #7d7960); font-variant-numeric: tabular-nums; }
+
+    #msg { flex: 1; display: flex; align-items: center; color: var(--u-sub, #b0aa8e); font-size: 13px; }
+    .foot { flex-shrink: 0; font-size: 9px; color: var(--u-muted, #7d7960); }
+    @media (max-height: 260px) { .sec, .foot, #mix { display: none; } }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">♪</div>
+      <div class="label">Audio</div>
+      <div class="spacer"></div>
+      <div class="master" style="width:52%">
+        <input id="vol" type="range" min="0" max="100" value="50" />
+        <span class="mv" id="vol-pct">—</span>
+      </div>
+    </div>
+
+    <div class="toggles">
+      <button class="tg" id="tg-mic">
+        <span class="dot"></span>
+        <span style="min-width:0">
+          <span class="t-name" id="mic-state">Mic live</span>
+          <span class="t-sub" id="mic-name">—</span>
+        </span>
+      </button>
+      <button class="tg" id="tg-discord">
+        <span class="dot"></span>
+        <span style="min-width:0">
+          <span class="t-name" id="dc-state">Discord</span>
+          <span class="t-sub" id="dc-sub">not running</span>
+        </span>
+      </button>
+    </div>
+
+    <div class="sec">Output</div>
+    <div id="outs"></div>
+
+    <div class="sec">App mixer</div>
+    <div id="mix"></div>
+
+    <div id="msg" style="display:none">Starting audio helper…</div>
+    <div class="foot">tap an output to switch · mic mute applies system-wide</div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+    let state = null, busy = false, volDragging = false;
+
+    async function send(cmd, args) {
+      try {
+        const r = await fetch("/api/system", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cmd, args }),
+        });
+        return await r.json();
+      } catch (e) { return { ok: false, error: e.message }; }
+    }
+
+    async function poll() {
+      try {
+        const d = await (await fetch("/api/system")).json();
+        if (d.warming || !d.audio) {
+          $("msg").style.display = "flex";
+          $("msg").textContent = d.error || "Starting audio helper…";
+          return;
+        }
+        $("msg").style.display = "none";
+        state = d.audio;
+        render();
+      } catch (e) {
+        $("msg").style.display = "flex";
+        $("msg").textContent = "Can't reach the local server.";
+      }
+    }
+
+    // Windows exposes dozens of endpoints once a virtual mixer is installed.
+    // Hide the ones you would never deliberately pick, unless one is somehow
+    // the active device — then it has to stay visible or you could not switch off it.
+    // Not anchored: these fragments appear mid-name too, e.g.
+    // "Speakers (Steam Streaming Speakers)". "Voicemeeter Input" is kept — it is
+    // the one you would actually route to; the numbered strips are not.
+    const NOISE = /(Voicemeeter (In \d|AUX|VAIO\d)|CABLE Input|Steam Streaming)/i;
+    function interesting(o) { return o.isDefault || !NOISE.test(o.name); }
+
+    function render() {
+      const outs = (state.outputs || []).filter(interesting);
+      const def = (state.outputs || []).find((o) => o.isDefault);
+
+      // Master volume — don't fight the user's finger mid-drag.
+      if (def && !volDragging) {
+        const v = Math.round(def.volume * 100);
+        $("vol").value = v;
+        $("vol").style.setProperty("--fill", v + "%");
+        $("vol-pct").textContent = def.muted ? "muted" : v + "%";
+      }
+
+      const list = $("outs");
+      const sig = outs.map((o) => o.id + (o.isDefault ? "*" : "")).join("|");
+      if (list.dataset.sig !== sig) {
+        list.dataset.sig = sig;
+        list.innerHTML = "";
+        for (const o of outs) {
+          const el = document.createElement("div");
+          el.className = "dev" + (o.isDefault ? " on" : "");
+          el.innerHTML =
+            '<span class="d-mark">' + (o.isDefault ? "◉" : "○") + "</span>" +
+            '<span class="d-name"></span>' +
+            (o.isDefault ? '<span class="meter"><i></i></span>' : "");
+          el.querySelector(".d-name").textContent = o.name;
+          el.addEventListener("pointerup", () => switchTo(o));
+          list.appendChild(el);
+        }
+        // Keep the device you are actually using on screen when the list is
+        // longer than the panel.
+        const on = list.querySelector(".dev.on");
+        if (on) list.scrollTop = Math.max(0, on.offsetTop - list.clientHeight / 2 + on.offsetHeight / 2);
+      }
+      // Level bar updates every tick without rebuilding the list.
+      const bar = list.querySelector(".dev.on .meter i");
+      if (bar && def) bar.style.width = Math.min(100, Math.round(Math.sqrt(def.peak) * 140)) + "%";
+
+      // Mic
+      const mic = (state.inputs || []).find((i) => i.isDefault);
+      const micEl = $("tg-mic");
+      micEl.classList.toggle("muted", !!(mic && mic.muted));
+      $("mic-state").textContent = mic ? (mic.muted ? "Mic MUTED" : "Mic live") : "No mic";
+      $("mic-name").textContent = mic ? mic.name : "no input device";
+
+      // Discord: mutes what you HEAR from Discord (its app volume). Muting
+      // yourself is the mic button — that is system-wide, so it covers Discord
+      // and everything else at once.
+      const dc = (state.sessions || []).find((s) => /^discord/i.test(s.name));
+      const dcEl = $("tg-discord");
+      dcEl.classList.toggle("muted", !!(dc && dc.muted));
+      $("dc-state").textContent = dc ? (dc.muted ? "Discord MUTED" : "Discord") : "Discord";
+      $("dc-sub").textContent = dc ? (dc.muted ? "you can't hear it" : "output " + Math.round(dc.volume * 100) + "%") : "not running";
+      dcEl.style.opacity = dc ? 1 : 0.45;
+
+      renderMixer();
+    }
+
+    function renderMixer() {
+      const apps = (state.sessions || [])
+        .filter((s) => s.name !== "System sounds")
+        .sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name));
+      const mix = $("mix");
+      const sig = apps.map((a) => a.name).join("|");
+      if (mix.dataset.sig !== sig) {
+        mix.dataset.sig = sig;
+        mix.innerHTML = "";
+        for (const a of apps) {
+          const row = document.createElement("div");
+          row.className = "app";
+          row.dataset.name = a.name;
+          row.innerHTML =
+            '<span class="a-name"></span>' +
+            '<button class="a-mute">🔊</button>' +
+            '<input type="range" min="0" max="100" />' +
+            '<span class="a-pct"></span>';
+          row.querySelector(".a-name").textContent = a.name;
+          const slider = row.querySelector("input");
+          slider.addEventListener("input", () => {
+            row.querySelector(".a-pct").textContent = slider.value + "%";
+            slider.style.setProperty("--fill", slider.value + "%");
+          });
+          slider.addEventListener("change", () =>
+            send("audio.session", { name: a.name, volume: Number(slider.value) / 100 }));
+          row.querySelector(".a-mute").addEventListener("pointerup", () => {
+            const nowMuted = !row.classList.contains("off");
+            row.classList.toggle("off", nowMuted);          // optimistic
+            send("audio.session", { name: a.name, mute: nowMuted }).then(poll);
+          });
+          mix.appendChild(row);
+        }
+      }
+      for (const a of apps) {
+        const row = mix.querySelector('.app[data-name="' + CSS.escape(a.name) + '"]');
+        if (!row) continue;
+        row.classList.toggle("off", a.muted);
+        const slider = row.querySelector("input");
+        if (document.activeElement !== slider) {
+          const v = Math.round(a.volume * 100);
+          slider.value = v;
+          slider.style.setProperty("--fill", v + "%");
+          row.querySelector(".a-pct").textContent = v + "%";
+        }
+        row.querySelector(".a-mute").textContent = a.muted ? "🔇" : "🔊";
+      }
+    }
+
+    async function switchTo(o) {
+      if (busy || o.isDefault) return;
+      busy = true;
+      // Paint it immediately; the next poll confirms from Windows itself.
+      state.outputs.forEach((x) => { x.isDefault = x.id === o.id; });
+      render();
+      await send("audio.setDefault", { id: o.id });
+      await poll();
+      busy = false;
+    }
+
+    $("tg-mic").addEventListener("pointerup", async () => {
+      const mic = (state && state.inputs || []).find((i) => i.isDefault);
+      if (!mic) return;
+      $("tg-mic").classList.toggle("muted", !mic.muted);
+      await send("audio.micMute", { mute: !mic.muted });
+      poll();
+    });
+    $("tg-discord").addEventListener("pointerup", async () => {
+      const dc = (state && state.sessions || []).find((s) => /^discord/i.test(s.name));
+      if (!dc) return;
+      $("tg-discord").classList.toggle("muted", !dc.muted);
+      await send("audio.session", { name: dc.name, mute: !dc.muted });
+      poll();
+    });
+
+    const vol = $("vol");
+    vol.addEventListener("pointerdown", () => { volDragging = true; });
+    vol.addEventListener("input", () => {
+      vol.style.setProperty("--fill", vol.value + "%");
+      $("vol-pct").textContent = vol.value + "%";
+    });
+    const commitVol = () => {
+      volDragging = false;
+      send("audio.setVolume", { level: Number(vol.value) / 100 });
+    };
+    vol.addEventListener("change", commitVol);
+    vol.addEventListener("pointerup", commitVol);
+
+    poll();
+    let timer = setInterval(poll, 1000);
+    document.addEventListener("visibilitychange", () => {
+      clearInterval(timer);
+      if (!document.hidden) { poll(); timer = setInterval(poll, 1000); }
+    });
+  </script>
+</body>
+</html>

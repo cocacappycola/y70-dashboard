@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calculator</title>
+  <script src="/theme.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--k-grad, #191430) 0%, var(--k-bg, #101014) 60%);
+      color: var(--k-text, #f0eefa);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 8px 12px 10px; gap: 6px; }
+
+    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .chip {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--k-accent, #7c5cff); color: var(--k-accent-ink, #fff);
+      display: flex; align-items: center; justify-content: center; font-size: 13px;
+    }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--k-sub, #a49cc4); }
+    .spacer { flex: 1; }
+
+    /* ---- Display ---- */
+    .screen {
+      flex-shrink: 0; text-align: right; padding: 4px 6px 6px;
+      background: var(--k-card, rgba(255,255,255,.045));
+      border: 1px solid var(--k-card-line, rgba(255,255,255,.08));
+      border-radius: 10px; min-width: 0; overflow: hidden;
+    }
+    /* The completed calculation this answer came from. */
+    #hist {
+      font-size: 11px; color: var(--k-muted, #6f6890); height: 14px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* Never set `direction: rtl` on these to keep the tail visible when the sum
+       overflows: the bidi algorithm reorders maths that is not pure digits and
+       plus signs, so "10÷4" renders as "4÷10" and "2×−3" as "3−×2". The
+       expression is laid out left-to-right and scrolled to its end instead. */
+    #out {
+      font-size: clamp(22px, 6.5vh, 40px); font-weight: 300; letter-spacing: -.02em;
+      line-height: 1.15; white-space: nowrap;
+      overflow-x: auto; overflow-y: hidden;
+      text-align: right; font-variant-numeric: tabular-nums;
+    }
+    #out::-webkit-scrollbar { display: none; }
+    #out.err { color: var(--k-accent, #7c5cff); font-size: clamp(15px, 4vh, 22px); }
+
+    /* ---- Keypad ---- */
+    #pad {
+      flex: 1; min-height: 0; display: grid; gap: 6px;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: repeat(5, minmax(0, 1fr));
+    }
+    button {
+      font-family: inherit; border: 1px solid transparent; cursor: pointer;
+      background: var(--k-surface, #1c1a26); color: var(--k-text, #f0eefa);
+      border-radius: 10px; font-size: clamp(14px, 3.4vh, 22px); font-weight: 500;
+      min-height: 0; padding: 0; touch-action: manipulation;
+      display: flex; align-items: center; justify-content: center;
+    }
+    button:active { background: var(--k-surface-2, #272334); transform: scale(.96); }
+    /* Operators and the utility row read as chrome, digits as content. */
+    .op { color: var(--k-accent, #7c5cff); font-weight: 700; }
+    .fn { background: var(--k-bg-2, #14121c); color: var(--k-sub, #a49cc4); font-size: clamp(12px, 2.8vh, 17px); }
+    .eq { background: var(--k-accent, #7c5cff); color: var(--k-accent-ink, #fff); font-weight: 700; }
+    .eq:active { background: var(--k-accent-dim, #4a3a99); }
+
+    /* Very short panels: the history line is the first thing to go. */
+    @media (max-height: 190px) {
+      #hist { display: none; }
+      .head { display: none; }
+      #wrap { padding: 6px 8px 8px; gap: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">÷</div>
+      <div class="label">Calculator</div>
+      <div class="spacer"></div>
+    </div>
+
+    <div class="screen">
+      <div id="hist"></div>
+      <div id="out">0</div>
+    </div>
+
+    <div id="pad">
+      <button class="fn" data-k="C">C</button>
+      <button class="fn" data-k="back">⌫</button>
+      <button class="fn" data-k="%">%</button>
+      <button class="op" data-k="÷">÷</button>
+
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button class="op" data-k="×">×</button>
+
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button class="op" data-k="−">−</button>
+
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button class="op" data-k="+">+</button>
+
+      <button class="fn" data-k="neg">±</button>
+      <button data-k="0">0</button>
+      <button data-k=".">.</button>
+      <button class="eq" data-k="=">=</button>
+    </div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+    const OPS = { "+": 1, "−": 1, "×": 2, "÷": 2 };
+
+    let expr = "";        // what has been typed, e.g. "12+3×4"
+    let hist = "";        // the last completed calculation
+    let justSolved = false;
+
+    // ---- Evaluation ----------------------------------------------------------
+    // A real tokenizer + shunting-yard rather than eval(): it gets precedence
+    // right (2+3×4 = 14, not 20) and never executes what was typed.
+    function tokenize(src) {
+      const out = [];
+      let i = 0, sign = 1;
+      while (i < src.length) {
+        const c = src[i];
+        if (c >= "0" && c <= "9" || c === ".") {
+          let j = i;
+          while (j < src.length && (src[j] >= "0" && src[j] <= "9" || src[j] === ".")) j++;
+          const numText = src.slice(i, j);
+          i = j;
+          let value = parseFloat(numText);
+          if (isNaN(value)) throw new Error("bad number");
+          // Trailing % turns the number into a hundredth. Postfix, so it always
+          // means the same thing no matter where it appears.
+          while (src[i] === "%") { value /= 100; i++; }
+          out.push({ n: sign * value });
+          sign = 1;
+          continue;
+        }
+        if (c === "-" || c === "−") {
+          const prev = out[out.length - 1];
+          // Unary when it opens the expression or follows another operator. It
+          // negates the number that COMES NEXT rather than expanding to "0 − n",
+          // which binds wrongly after × or ÷ (2×−3 must be −6, not −3).
+          if (!prev || prev.op || sign === -1) { sign = -sign; i++; continue; }
+          out.push({ op: "−" }); i++; continue;
+        }
+        if (OPS[c]) {
+          if (sign === -1) throw new Error("incomplete");
+          out.push({ op: c }); i++; continue;
+        }
+        throw new Error("unexpected " + c);
+      }
+      if (sign === -1) throw new Error("incomplete");
+      return out;
+    }
+
+    function evaluate(src) {
+      const tokens = tokenize(src);
+      if (!tokens.length) return 0;
+      const nums = [], ops = [];
+      const apply = () => {
+        const op = ops.pop(), b = nums.pop(), a = nums.pop();
+        if (a === undefined || b === undefined) throw new Error("incomplete");
+        if (op === "+") nums.push(a + b);
+        else if (op === "−") nums.push(a - b);
+        else if (op === "×") nums.push(a * b);
+        else {
+          if (b === 0) throw new Error("divide by zero");
+          nums.push(a / b);
+        }
+      };
+      for (const t of tokens) {
+        if (t.op) {
+          while (ops.length && OPS[ops[ops.length - 1]] >= OPS[t.op]) apply();
+          ops.push(t.op);
+        } else nums.push(t.n);
+      }
+      while (ops.length) apply();
+      if (nums.length !== 1) throw new Error("incomplete");
+      return nums[0];
+    }
+
+    // Enough precision to be useful, without 0.1+0.2 = 0.30000000000000004.
+    function fmt(n) {
+      if (!isFinite(n)) throw new Error("undefined");
+      const r = Math.round(n * 1e10) / 1e10;
+      if (Math.abs(r) >= 1e12 || (r !== 0 && Math.abs(r) < 1e-9)) return r.toExponential(6);
+      return String(r);
+    }
+
+    // ---- Display -------------------------------------------------------------
+    function render() {
+      const o = $("out");
+      const text = expr === "" ? "0" : expr;
+      o.textContent = text;
+      o.classList.remove("err");
+      // Long sums shrink a step or two, then scroll so the newest digit is the
+      // one you can see.
+      o.style.fontSize = text.length > 22 ? "clamp(13px, 3.2vh, 20px)"
+                       : text.length > 14 ? "clamp(17px, 4.6vh, 28px)" : "";
+      o.scrollLeft = o.scrollWidth;
+      $("hist").textContent = hist;
+    }
+    function showError(msg) {
+      $("out").textContent = msg;
+      $("out").classList.add("err");
+    }
+
+    // The number currently being typed, at the end of the expression.
+    function tailNumber() {
+      const m = expr.match(/(\d*\.?\d*%*)$/);
+      return m ? m[1] : "";
+    }
+
+    // ---- Input ---------------------------------------------------------------
+    function press(k) {
+      // Typing a digit straight after "=" starts fresh; typing an operator
+      // continues from the answer, which is what a calculator should do.
+      if (justSolved) {
+        if (/^[0-9.]$/.test(k)) expr = "";
+        justSolved = false;
+      }
+
+      if (k === "C") { expr = ""; hist = ""; return render(); }
+      if (k === "back") { expr = expr.slice(0, -1); return render(); }
+
+      if (k === "neg") {
+        // Flip the sign of the number being typed, not the whole expression.
+        const tail = tailNumber();
+        const head = expr.slice(0, expr.length - tail.length);
+        if (head.endsWith("−") && (head.length === 1 || OPS[head[head.length - 2]])) {
+          expr = head.slice(0, -1) + tail;                 // it was already negative
+        } else {
+          expr = head + "−" + tail;
+        }
+        return render();
+      }
+
+      if (k === "%") {
+        if (!tailNumber().replace(/%/g, "")) return;       // nothing to take a % of
+        expr += "%";
+        return render();
+      }
+
+      if (OPS[k]) {
+        if (expr === "") { if (k !== "−") return; }        // allow a leading minus
+        else if (OPS[expr[expr.length - 1]]) expr = expr.slice(0, -1);  // swap operators
+        expr += k;
+        return render();
+      }
+
+      if (k === ".") {
+        const tail = tailNumber();
+        if (tail.includes(".") || tail.includes("%")) return;
+        expr += tail === "" ? "0." : ".";
+        return render();
+      }
+
+      if (k === "=") {
+        if (!expr) return;
+        try {
+          const value = fmt(evaluate(expr));
+          hist = expr + " =";
+          expr = value;
+          justSolved = true;
+          render();
+        } catch (e) {
+          showError(e.message === "divide by zero" ? "Can't divide by zero" : "Not a complete sum");
+        }
+        return;
+      }
+
+      if (/^[0-9]$/.test(k)) {
+        if (tailNumber().includes("%")) expr += "×";       // 50%7 -> 50% × 7
+        expr += k;
+        return render();
+      }
+    }
+
+    document.querySelectorAll("#pad button").forEach((b) => {
+      // pointerdown, not click: on a touch panel it feels immediate.
+      b.addEventListener("pointerdown", (e) => { e.preventDefault(); press(b.dataset.k); });
+    });
+
+    // It is a desktop screen too, so accept the keyboard.
+    const KEYMAP = { "*": "×", x: "×", X: "×", "/": "÷", "-": "−", Enter: "=", "=": "=",
+                     Backspace: "back", Delete: "C", Escape: "C", c: "C", C: "C" };
+    addEventListener("keydown", (e) => {
+      const k = KEYMAP[e.key] || (/^[0-9.+%]$/.test(e.key) ? e.key : null);
+      if (!k) return;
+      e.preventDefault();
+      press(k);
+    });
+
+    render();
+  </script>
+</body>
+</html>

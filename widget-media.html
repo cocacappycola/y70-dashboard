@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Now playing</title>
+  <script src="/theme.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--m-grad, #14241a) 0%, var(--m-bg, #101014) 60%);
+      color: var(--m-text, #eef6f0);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 14px 0; gap: 8px; }
+    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .chip {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--m-accent, #1ed760); color: var(--m-accent-ink, #000);
+      display: flex; align-items: center; justify-content: center; font-size: 12px;
+    }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--m-sub, #9fb5a6); }
+    .spacer { flex: 1; }
+    /* Which program Windows says owns the sound right now. */
+    #src {
+      font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+      color: var(--m-accent, #1ed760); background: var(--m-accent-soft, rgba(30,215,96,.14));
+      border-radius: 999px; padding: 3px 9px; white-space: nowrap;
+    }
+
+    .main { flex: 1; min-height: 0; display: flex; align-items: center; gap: 14px; }
+    /* A div, not an img: with no artwork available it has to be able to show a
+       glyph instead, and an <img> can't render text. */
+    #art {
+      width: clamp(48px, 16vh, 96px); aspect-ratio: 1; border-radius: 8px; flex-shrink: 0;
+      background: var(--m-surface-2, #232a25) center/cover no-repeat;
+      display: flex; align-items: center; justify-content: center;
+      font-size: clamp(20px, 6vh, 34px); color: var(--m-accent-dim, #6d8073);
+      border: 1px solid var(--m-card-line, rgba(255,255,255,.08));
+    }
+    .meta { min-width: 0; flex: 1; }
+    #title { font-size: clamp(15px, 3.4vh, 22px); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #artist { font-size: clamp(11px, 2.4vh, 14px); color: var(--m-sub, #9fb5a6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+    #album { font-size: 10px; color: var(--m-muted, #6d8073); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+
+    .ctl-row { display: flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; }
+    .ctl {
+      background: transparent; border: none; color: var(--m-sub, #9fb5a6); cursor: pointer;
+      width: 44px; height: 40px; border-radius: 10px; font-size: 17px; font-family: inherit;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ctl:active { color: var(--m-text, #fff); transform: scale(.92); }
+    .ctl:disabled { opacity: .28; }
+    #play {
+      background: var(--m-accent, #1ed760); color: var(--m-accent-ink, #000);
+      width: 46px; height: 46px; border-radius: 50%; font-size: 18px;
+    }
+    #play:active { background: var(--m-accent-dim, #14803a); }
+
+    .times { display: flex; justify-content: space-between; font-size: 9.5px; color: var(--m-muted, #6d8073); font-variant-numeric: tabular-nums; }
+    #seek { height: 6px; position: relative; cursor: pointer; touch-action: none; flex-shrink: 0; border-radius: 3px; overflow: hidden; }
+    #seek::before { content: ""; position: absolute; inset: 0; background: var(--m-surface-2, #232a25); }
+    #fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: var(--m-accent, #1ed760); }
+    #seek.locked { opacity: .4; cursor: default; }
+    .pad { height: 8px; flex-shrink: 0; }
+
+    #msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--m-sub, #9fb5a6); font-size: 13px; text-align: center; }
+    @media (max-height: 150px) { .times, #album { display: none; } .head { display: none; } }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">▶</div>
+      <div class="label">Now playing</div>
+      <div class="spacer"></div>
+      <div id="src"></div>
+    </div>
+
+    <div id="content" style="display:none; flex:1; min-height:0; flex-direction:column; gap:8px;">
+      <div class="main">
+        <div id="art">♪</div>
+        <div class="meta">
+          <div id="title">—</div>
+          <div id="artist"></div>
+          <div id="album"></div>
+        </div>
+      </div>
+      <div class="ctl-row">
+        <button class="ctl" id="prev">⏮</button>
+        <button class="ctl" id="play">▶</button>
+        <button class="ctl" id="next">⏭</button>
+      </div>
+      <div class="times"><span id="t-pos">0:00</span><span id="t-dur">0:00</span></div>
+      <div id="seek"><div id="fill"></div></div>
+      <div class="pad"></div>
+    </div>
+    <div id="msg">Nothing is playing.</div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+    // Windows' media bus reports position only when it feels like it, so the
+    // bar is interpolated between updates and re-anchored on every poll.
+    let media = null, anchorPos = 0, anchorAt = 0, seeking = false;
+    // Art can't be read out of GSMTC from PowerShell, so when the source is
+    // Spotify we borrow the artwork the Spotify app already broadcasts.
+    let spotifyArt = "", spotifyKey = "";
+
+    const fmt = (ms) => {
+      if (!ms || ms < 0) return "0:00";
+      const s = Math.floor(ms / 1000);
+      return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    };
+    const livePos = () => {
+      if (!media) return 0;
+      let p = anchorPos;
+      if (media.playing) p += Date.now() - anchorAt;
+      return Math.max(0, Math.min(p, media.duration || 0));
+    };
+
+    async function send(action, args) {
+      try {
+        await fetch("/api/system", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cmd: "media.command", args: Object.assign({ action }, args || {}) }),
+        });
+      } catch (e) { /* the next poll re-syncs */ }
+      setTimeout(poll, 250);
+    }
+
+    async function poll() {
+      try {
+        const d = await (await fetch("/api/system")).json();
+        const m = d.media;
+        if (!m || !m.title) {
+          media = null;
+          $("content").style.display = "none";
+          $("msg").style.display = "flex";
+          $("msg").textContent = d.warming ? "Starting media helper…" : "Nothing is playing.";
+          $("src").textContent = "";
+          return;
+        }
+        $("content").style.display = "flex";
+        $("msg").style.display = "none";
+        media = m;
+        anchorPos = m.position; anchorAt = Date.now();
+        render();
+      } catch (e) {
+        $("msg").style.display = "flex";
+        $("msg").textContent = "Can't reach the local server.";
+        $("content").style.display = "none";
+      }
+    }
+
+    function render() {
+      const m = media;
+      $("src").textContent = m.app || "";
+      $("title").textContent = m.title || "—";
+      $("artist").textContent = m.artist || "";
+      $("album").textContent = m.album || "";
+      $("play").textContent = m.playing ? "⏸" : "▶";
+      $("prev").disabled = !m.canPrev;
+      $("next").disabled = !m.canNext;
+      $("seek").classList.toggle("locked", !m.canSeek);
+
+      const art = m.art || (/spotify/i.test(m.app) ? spotifyArt : "");
+      const el = $("art");
+      if (art) { el.style.backgroundImage = 'url("' + art + '")'; el.textContent = ""; }
+      else { el.style.backgroundImage = ""; el.textContent = "♪"; }
+      $("t-dur").textContent = fmt(m.duration);
+      tick();
+    }
+
+    function tick() {
+      if (!media || seeking) return;
+      const p = livePos();
+      $("t-pos").textContent = fmt(p);
+      $("fill").style.width = media.duration ? (p / media.duration * 100).toFixed(2) + "%" : "0%";
+    }
+
+    $("play").addEventListener("pointerup", () => {
+      if (!media) return;
+      media.playing = !media.playing;              // optimistic
+      anchorPos = livePos(); anchorAt = Date.now();
+      $("play").textContent = media.playing ? "⏸" : "▶";
+      send("toggle");
+    });
+    $("next").addEventListener("pointerup", () => send("next"));
+    $("prev").addEventListener("pointerup", () => send("prev"));
+
+    const bar = $("seek");
+    const ratioAt = (e) => {
+      const r = bar.getBoundingClientRect();
+      return Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
+    };
+    bar.addEventListener("pointerdown", (e) => {
+      if (!media || !media.canSeek || !media.duration) return;
+      seeking = true;
+      bar.setPointerCapture(e.pointerId);
+      $("fill").style.width = (ratioAt(e) * 100).toFixed(2) + "%";
+    });
+    bar.addEventListener("pointermove", (e) => {
+      if (!seeking) return;
+      const r = ratioAt(e);
+      $("fill").style.width = (r * 100).toFixed(2) + "%";
+      $("t-pos").textContent = fmt(r * media.duration);
+    });
+    bar.addEventListener("pointerup", (e) => {
+      if (!seeking) return;
+      seeking = false;
+      const ms = Math.floor(ratioAt(e) * media.duration);
+      anchorPos = ms; anchorAt = Date.now();
+      send("seek", { ms });
+    });
+
+    // The Spotify app in the shell publishes artwork; keep the latest so a
+    // Spotify session here can show a cover even though GSMTC won't hand one over.
+    window.addEventListener("message", (e) => {
+      const d = e.data;
+      if (!d || d.type !== "y70:state") return;
+      if (d.art && d.title !== spotifyKey) { spotifyArt = d.art; spotifyKey = d.title; if (media) render(); }
+    });
+
+    poll();
+    let poller = setInterval(poll, 1000);
+    setInterval(tick, 250);
+    document.addEventListener("visibilitychange", () => {
+      clearInterval(poller);
+      if (!document.hidden) { poll(); poller = setInterval(poll, 1000); }
+    });
+  </script>
+</body>
+</html>

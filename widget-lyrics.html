@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lyrics</title>
+  <script src="/theme.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--m-grad, #14241a) 0%, var(--m-bg, #101014) 60%);
+      color: var(--m-text, #eef6f0);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 8px 0 0; }
+    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 0 14px 4px; }
+    .chip {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--m-accent, #1ed760); color: var(--m-accent-ink, #000);
+      display: flex; align-items: center; justify-content: center; font-size: 12px;
+    }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--m-sub, #9fb5a6); }
+    .spacer { flex: 1; }
+    #track { font-size: 10px; color: var(--m-muted, #6d8073); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 58%; }
+
+    #scroll {
+      flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+      padding: 8px 16px 40%;                 /* room so the active line can centre */
+      scroll-behavior: smooth;
+      -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 82%, transparent 100%);
+              mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 82%, transparent 100%);
+    }
+    #scroll::-webkit-scrollbar { width: 5px; }
+    #scroll::-webkit-scrollbar-thumb { background: var(--m-accent-dim, #14803a); border-radius: 3px; }
+    #scroll::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+
+    .line {
+      font-size: clamp(14px, 2.6vh, 20px); line-height: 1.34; font-weight: 600;
+      color: var(--m-muted, #55655c); padding: 5px 0;
+      transition: color .25s ease, opacity .25s ease, transform .25s ease;
+      cursor: pointer; transform-origin: left center;
+    }
+    .line.sung { color: var(--m-sub, #7b8f82); }
+    .line.now {
+      color: var(--m-accent, #1ed760); transform: scale(1.04);
+      text-shadow: 0 0 18px var(--m-accent-soft, rgba(30,215,96,.4));
+    }
+    .line.blank { height: 8px; padding: 0; }
+    /* Unsynced lyrics: no highlighting, just readable text. */
+    #scroll.plain .line { color: var(--m-sub, #9fb5a6); cursor: default; font-weight: 500; }
+
+    #msg {
+      flex: 1; display: flex; align-items: center; justify-content: center; text-align: center;
+      color: var(--m-sub, #9fb5a6); font-size: 13px; padding: 0 20px; line-height: 1.5;
+    }
+    .foot { flex-shrink: 0; font-size: 9px; color: var(--m-muted, #6d8073); padding: 4px 14px 6px; display: flex; gap: 8px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">“”</div>
+      <div class="label">Lyrics</div>
+      <div class="spacer"></div>
+      <div id="track"></div>
+    </div>
+    <div id="scroll" style="display:none"></div>
+    <div id="msg">Waiting for something to play…</div>
+    <div class="foot"><span id="mode"></span><span class="spacer"></span><span>lrclib.net</span></div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+    let key = "";           // artist|title currently loaded
+    let lines = [];         // [{t, text}]
+    let plain = false;
+    let media = null, anchorPos = 0, anchorAt = 0;
+    let activeIdx = -1, userScrolledAt = 0;
+
+    const livePos = () => {
+      if (!media) return 0;
+      let p = anchorPos;
+      if (media.playing) p += Date.now() - anchorAt;
+      return Math.max(0, p);
+    };
+
+    async function poll() {
+      try {
+        const d = await (await fetch("/api/system")).json();
+        const m = d.media;
+        if (!m || !m.title) {
+          media = null;
+          show(null, d.warming ? "Starting media helper…" : "Waiting for something to play…");
+          key = "";
+          return;
+        }
+        media = m;
+        anchorPos = m.position; anchorAt = Date.now();
+        const k = (m.artist || "") + "|" + (m.title || "");
+        if (k !== key) { key = k; loadLyrics(m); }
+        $("track").textContent = m.artist ? m.artist + " — " + m.title : m.title;
+      } catch (e) {
+        show(null, "Can't reach the local server.");
+      }
+    }
+
+    function show(html, message) {
+      if (html == null) {
+        $("scroll").style.display = "none";
+        $("msg").style.display = "flex";
+        $("msg").textContent = message;
+        $("mode").textContent = "";
+        lines = [];
+      } else {
+        $("scroll").style.display = "block";
+        $("msg").style.display = "none";
+      }
+    }
+
+    async function loadLyrics(m) {
+      lines = []; activeIdx = -1; plain = false;
+      show(null, "Looking for lyrics…");
+      try {
+        const q = new URLSearchParams({
+          artist: m.artist || "", title: m.title || "",
+          album: m.album || "", duration: String(m.duration || 0),
+        });
+        const d = await (await fetch("/api/lyrics?" + q)).json();
+        if (!d.ok) return show(null, "Lyrics lookup failed.");
+        if (!d.found) return show(null, "No lyrics found for\n" + (m.artist || "") + " — " + m.title);
+        if (d.instrumental) return show(null, "🎹  Instrumental");
+
+        if (d.synced && d.synced.length) {
+          lines = d.synced;
+          plain = false;
+        } else if (d.plain) {
+          lines = d.plain.split(/\r?\n/).map((t) => ({ t: -1, text: t }));
+          plain = true;
+        } else {
+          return show(null, "No lyrics found.");
+        }
+        $("mode").textContent = plain ? "unsynced" : lines.length + " lines · synced";
+        renderLines();
+        show("", "");
+      } catch (e) {
+        show(null, "Lyrics lookup failed.");
+      }
+    }
+
+    function renderLines() {
+      const box = $("scroll");
+      box.classList.toggle("plain", plain);
+      box.innerHTML = "";
+      lines.forEach((l, i) => {
+        const el = document.createElement("div");
+        el.className = "line" + (l.text ? "" : " blank");
+        el.textContent = l.text;
+        el.dataset.i = i;
+        // Tapping a line seeks the *actual* player to it, whatever app that is.
+        if (!plain && l.t >= 0) {
+          el.addEventListener("pointerup", () => {
+            if (!media || !media.canSeek) return;
+            anchorPos = l.t; anchorAt = Date.now();
+            fetch("/api/system", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ cmd: "media.command", args: { action: "seek", ms: l.t } }),
+            }).catch(() => {});
+          });
+        }
+        box.appendChild(el);
+      });
+      box.scrollTop = 0;
+    }
+
+    function tick() {
+      if (plain || !lines.length || !media) return;
+      const p = livePos();
+      // Last line whose timestamp has passed.
+      let idx = -1;
+      for (let i = 0; i < lines.length; i++) { if (lines[i].t <= p) idx = i; else break; }
+      if (idx === activeIdx) return;
+      activeIdx = idx;
+      const box = $("scroll");
+      box.querySelectorAll(".line").forEach((el, i) => {
+        el.classList.toggle("now", i === idx);
+        el.classList.toggle("sung", i < idx);
+      });
+      // Don't yank the view while the user is reading ahead.
+      if (Date.now() - userScrolledAt < 6000) return;
+      const el = box.querySelector(".line.now");
+      if (el) box.scrollTop = el.offsetTop - box.clientHeight * 0.42;
+    }
+
+    $("scroll").addEventListener("pointerdown", () => { userScrolledAt = Date.now(); });
+    $("scroll").addEventListener("wheel", () => { userScrolledAt = Date.now(); }, { passive: true });
+
+    poll();
+    let poller = setInterval(poll, 1500);
+    setInterval(tick, 200);
+    document.addEventListener("visibilitychange", () => {
+      clearInterval(poller);
+      if (!document.hidden) { poll(); poller = setInterval(poll, 1500); }
+    });
+  </script>
+</body>
+</html>
