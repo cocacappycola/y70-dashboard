@@ -82,7 +82,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Y70 Dashboard",
-      "uninstallDisplayName": "Y70 Dashboard"
+      "uninstallDisplayName": "Y70 Dashboard",
+      "artifactName": "Y70-Dashboard-Setup-${version}.exe"
     },
     "portable": {
       "artifactName": "Y70-Dashboard-portable-${version}.exe"
@@ -91,7 +92,8 @@
       {
         "provider": "github",
         "owner": "cocacappycola",
-        "repo": "y70-dashboard"
+        "repo": "y70-dashboard",
+        "releaseType": "release"
       }
     ]
   },
