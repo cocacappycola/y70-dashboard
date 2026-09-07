@@ -75,9 +75,15 @@ Cut a release with:
 
 ```bash
 cd v2
-npm version patch          # or edit "version" in package.json
+npm version patch          # bumps package.json AND creates the git tag
+git push --follow-tags
 npm run release
 ```
+
+Push the tag **before** publishing: GitHub refuses to create a non-draft
+release for a tag that does not exist yet ("Published releases must have a
+valid tag"), and `npm run release` publishes non-draft on purpose, because a
+draft is invisible to the updater.
 
 Auto-update only runs in the installed build — there is nothing to replace when
 running from source, and the app reports its status as `dev` there instead.
