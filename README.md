@@ -231,16 +231,22 @@ one-time token exchange.
 3. Still on OAuth2, under **Redirects**, add exactly `http://localhost` and
    **Save Changes**. It is never actually opened; it only has to be registered and
    to match what the token exchange sends.
-4. Copy [`discord-app.example.json`](discord-app.example.json) to
-   **`discord-app.json`** in the dashboard folder and paste both values in:
-   ```json
-   { "clientId": "...", "clientSecret": "..." }
-   ```
-5. Restart `node server.js`.
-6. Make sure the **Discord desktop app** is running and signed in. The browser
+4. Open the **Discord** widget and paste both values into its **Client ID** and
+   **Client Secret** boxes, then **Save & connect**. The dashboard writes
+   `discord-app.json` for you — there is no file to create and no restart. (The
+   secret box is masked, with a **show** button, and **Change credentials** gets
+   you back to the form later.)
+5. Make sure the **Discord desktop app** is running and signed in. The browser
    version has no local socket, so there is nothing to connect to.
-7. Open the **Discord** widget → **Link Discord** → **approve the popup that appears
-   inside Discord**. That is the only prompt; it does not open a browser.
+6. Tap **Link Discord** → **approve the popup that appears inside Discord**. That
+   is the only prompt; it does not open a browser.
+
+> On the V2 panel the credential boxes borrow the keyboard while they are
+> focused, the same way Notes does, so you can type or paste into them even
+> though the panel normally takes no keyboard input.
+>
+> A mistyped Client ID is reported as Discord's own **"Invalid Client ID"**
+> rather than a vague failure, and the dashboard stops retrying until you fix it.
 
 #### What it asks for, and what it doesn't
 
@@ -262,7 +268,9 @@ read chat, or do anything outside your voice settings.
 > strictly personal — the same client id will not work for anyone else, and there
 > is no point sharing it.
 
-**Where the secrets live.** `discord-app.json` (your client secret) and
+**Where the secrets live.** The client secret is posted once to the local server,
+written to disk, and never sent back to the page — the status the widget reads
+only ever says *whether* a secret exists. `discord-app.json` (your client secret) and
 `discord-token.json` (the access + refresh token, written automatically) both sit
 in the dashboard folder, and the web server **refuses to serve either** — they
 never reach the browser. To revoke: **Forget token** in the widget, or Discord →

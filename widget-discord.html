@@ -88,6 +88,33 @@
     .act:active { background: var(--d-accent-dim, #333a66); }
     .act.ghost { background: transparent; border: 1px solid var(--d-card-line, rgba(255,255,255,.14)); color: var(--d-sub, #a0a5bd); font-weight: 600; }
     .err { color: #ff9d9d; font-size: 11px; margin-top: 6px; }
+    .ok-msg { color: #7ee2a8; font-size: 11px; margin-top: 6px; }
+
+    /* ---- Credential form ---- */
+    .field { margin-top: 9px; }
+    .field label {
+      display: block; font-size: 9.5px; font-weight: 700; letter-spacing: .07em;
+      text-transform: uppercase; color: var(--d-sub, #a0a5bd); margin-bottom: 4px;
+    }
+    .field .row { display: flex; gap: 6px; align-items: center; }
+    .field input {
+      flex: 1; min-width: 0;
+      background: var(--d-card, rgba(255,255,255,.06));
+      border: 1px solid var(--d-card-line, rgba(255,255,255,.14));
+      border-radius: 8px; padding: 9px 10px; min-height: 38px;
+      color: var(--d-text, #fff); font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px; outline: none;
+      /* body is user-select:none, which would otherwise block select-and-paste */
+      -webkit-user-select: text; user-select: text;
+    }
+    .field input:focus { border-color: var(--d-accent, #5865f2); }
+    .field input::placeholder { color: var(--d-muted, #6c7189); }
+    .peek {
+      background: transparent; border: 1px solid var(--d-card-line, rgba(255,255,255,.14));
+      color: var(--d-sub, #a0a5bd); border-radius: 8px; width: 44px; min-height: 38px;
+      font-size: 11px; cursor: pointer; font-family: inherit; flex-shrink: 0;
+    }
+    .row-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
     .foot { flex-shrink: 0; font-size: 9px; color: var(--d-muted, #6c7189); }
   </style>
 </head>
@@ -143,13 +170,22 @@
       catch (e) { $("panel").textContent = "Can't reach the local server."; }
     }
 
+    // The poll runs every second; rebuilding the panel that often would wipe
+    // whatever is half-typed into the credential boxes. Only rebuild when the
+    // thing being described actually changed.
+    function panelSig() {
+      return [st.configured, st.hasSecret, st.connected, st.authed,
+              st.authorizing, st.fatal, st.error].join("|");
+    }
+
     function render() {
       if (!st) return;
       const live = st.authed && st.voice;
       $("live").style.display = live ? "flex" : "none";
       $("panel").style.display = live ? "none" : "block";
       $("who").textContent = st.user ? "@" + st.user.name : "";
-      if (live) renderLive(); else renderPanel();
+      if (live) { $("panel").dataset.sig = ""; renderLive(); }
+      else renderPanel();
     }
 
     function renderLive() {
@@ -196,25 +232,32 @@
 
     function renderPanel() {
       const p = $("panel");
+      const sig = panelSig();
+      if (p.dataset.sig === sig) return;      // unchanged: leave the form alone
+      p.dataset.sig = sig;
       $("foot").textContent = "";
-      if (!st.configured) {
+
+      if (!st.configured || !st.hasSecret) {
         p.innerHTML =
-          "<h4>One-time setup</h4><ol>" +
-          "<li>Open <code>discord.com/developers/applications</code> and hit <b>New Application</b>. Name it anything.</li>" +
-          "<li>On <b>OAuth2</b>, copy the <b>Client ID</b> and reveal the <b>Client Secret</b>.</li>" +
-          "<li>Still on OAuth2, add the redirect <code>" + st.redirectUri + "</code> and save.</li>" +
-          "<li>Create <code>discord-app.json</code> in the dashboard folder:<br>" +
-          '<code>{"clientId":"…","clientSecret":"…"}</code></li>' +
-          "<li>Restart the server, then come back here.</li>" +
+          "<h4>Connect Discord</h4><ol>" +
+          "<li>Open <code>discord.com/developers/applications</code> → <b>New Application</b>. Name it anything.</li>" +
+          "<li>On the <b>OAuth2</b> tab copy the <b>Client ID</b>, then <b>Reset Secret</b> and copy that.</li>" +
+          "<li>Still on OAuth2, add the redirect <code>" + st.redirectUri + "</code> and <b>Save Changes</b>.</li>" +
           "</ol>" +
-          '<div class="err">You must be the application’s <b>owner</b> — that is what lets it use the ' +
-          "<code>rpc</code> scopes without Discord whitelisting it.</div>";
-        return;
-      }
-      if (!st.hasSecret) {
-        p.innerHTML = "<h4>Client secret missing</h4>Add <code>clientSecret</code> to " +
-          "<code>discord-app.json</code> and restart the server. The one-time code Discord " +
-          "hands back can only be exchanged for a token with it.";
+          '<div class="field"><label>Client ID</label><div class="row">' +
+          '<input id="in-id" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="000000000000000000" />' +
+          "</div></div>" +
+          '<div class="field"><label>Client Secret</label><div class="row">' +
+          '<input id="in-secret" type="password" autocomplete="off" spellcheck="false" placeholder="••••••••••" />' +
+          '<button class="peek" id="b-peek">show</button>' +
+          "</div></div>" +
+          '<div class="row-btns"><button class="act" id="b-save">Save &amp; connect</button></div>' +
+          '<div id="form-msg"></div>' +
+          '<div class="err" style="margin-top:12px">You must be the application’s <b>owner</b> — that is what ' +
+          "lets it use the <code>rpc</code> scopes without Discord whitelisting it, and why this only works for " +
+          "your own account.<br>The secret is written to <code>discord-app.json</code> next to the dashboard, " +
+          "which the web server refuses to serve. It never leaves this machine.</div>";
+        wireForm();
         return;
       }
       if (!st.connected) {
@@ -222,8 +265,11 @@
           "Make sure the <b>desktop app</b> is running — the browser version has no local " +
           "socket to talk to." +
           (st.error ? '<div class="err">' + esc(st.error) + "</div>" : "") +
-          '<button class="act ghost" id="b-retry">Try again</button>';
+          '<div class="row-btns">' +
+          '<button class="act ghost" id="b-retry">Try again</button>' +
+          '<button class="act ghost" id="b-change2">Change credentials</button></div>';
         $("b-retry").addEventListener("pointerup", () => post("reconnect"));
+        $("b-change2").addEventListener("pointerup", () => post("clearConfig"));
         return;
       }
       p.innerHTML = "<h4>Ready to link</h4>" +
@@ -232,7 +278,10 @@
         "voice settings. Nothing is sent anywhere; the token stays in this folder." +
         (st.error ? '<div class="err">' + esc(st.error) + "</div>" : "") +
         '<button class="act" id="b-auth">' + (st.authorizing ? "Waiting for approval…" : "Link Discord") + "</button>" +
-        (st.authed ? "" : ' <button class="act ghost" id="b-forget">Forget token</button>');
+        (st.authed ? "" : ' <button class="act ghost" id="b-forget">Forget token</button>') +
+        ' <button class="act ghost" id="b-change">Change credentials</button>';
+      const c = $("b-change");
+      if (c) c.addEventListener("pointerup", () => post("clearConfig"));
       const a = $("b-auth");
       if (a) a.addEventListener("pointerup", async () => {
         a.textContent = "Approve it in Discord…";
@@ -244,6 +293,43 @@
     }
 
     const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+    // The V2 panel window takes no keyboard input by design, so a field has to
+    // borrow it while focused. In a browser this message goes nowhere useful
+    // and nothing changes.
+    function askKeyboard(on) {
+      try { window.parent.postMessage({ type: "y70:keyboard", on }, "*"); } catch (e) {}
+    }
+
+    function wireForm() {
+      const id = $("in-id"), secret = $("in-secret"), msg = $("form-msg"), save = $("b-save");
+      for (const el of [id, secret]) {
+        el.addEventListener("focus", () => askKeyboard(true));
+        el.addEventListener("blur", () => askKeyboard(false));
+        el.addEventListener("keydown", (e) => { if (e.key === "Enter") save.click(); });
+      }
+      $("b-peek").addEventListener("pointerup", () => {
+        const shown = secret.type === "text";
+        secret.type = shown ? "password" : "text";
+        $("b-peek").textContent = shown ? "show" : "hide";
+      });
+      save.addEventListener("pointerup", async () => {
+        const typedId = id.value.trim(), typedSecret = secret.value.trim();
+        msg.className = ""; msg.textContent = "";
+        save.textContent = "Saving…";
+        const r = await post("saveConfig", { clientId: typedId, clientSecret: typedSecret });
+        if (r.ok) {
+          askKeyboard(false);
+          return;                            // the next poll shows "Ready to link"
+        }
+        // post() re-rendered from the returned status, so put the typing back.
+        const id2 = $("in-id"), s2 = $("in-secret"), m2 = $("form-msg"), b2 = $("b-save");
+        if (id2) id2.value = typedId;
+        if (s2) s2.value = typedSecret;
+        if (b2) b2.textContent = "Save & connect";
+        if (m2) { m2.className = "err"; m2.textContent = r.error || "Could not save."; }
+      });
+    }
 
     $("b-mute").addEventListener("pointerup", () => {
       if (!st || !st.voice) return;

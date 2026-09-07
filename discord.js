@@ -149,7 +149,14 @@ function connect() {
 function teardown(reason, fatal) {
   const wasTearing = dc.tearing;
   dc.tearing = true;
-  if (dc.sock) { try { dc.sock.destroy(); } catch (e) {} }
+  if (dc.sock) {
+    // Drop the listeners BEFORE destroying. destroy() emits 'close' on a later
+    // tick, by which time the re-entrancy guard has already been cleared, and
+    // that second pass was overwriting Discord's own message ("Invalid Client
+    // ID") with a useless generic one.
+    try { dc.sock.removeAllListeners(); } catch (e) {}
+    try { dc.sock.destroy(); } catch (e) {}
+  }
   dc.sock = null; dc.connected = false; dc.authed = false;
   dc.voice = null; dc.channel = null; dc.speaking.clear();
   dc.pending.forEach((fn) => fn({ evt: "ERROR", data: { message: reason } }));
@@ -365,6 +372,39 @@ function status() {
 async function action(name, args) {
   args = args || {};
   switch (name) {
+    case "saveConfig": {
+      // Written here rather than by hand. The secret goes straight to a file
+      // the static server refuses to serve, and is never echoed back to the
+      // page — status() only ever reports whether one exists.
+      const id = String(args.clientId || "").trim();
+      const secret = String(args.clientSecret || "").trim();
+      if (!/^\d{17,20}$/.test(id)) {
+        return { ok: false, error: "That does not look like a Client ID (17-20 digits)." };
+      }
+      if (secret.length < 16) {
+        return { ok: false, error: "That does not look like a Client Secret." };
+      }
+      try {
+        fs.writeFileSync(appFile(), JSON.stringify({ clientId: id, clientSecret: secret }, null, 2), "utf8");
+      } catch (e) {
+        return { ok: false, error: "Couldn't write discord-app.json: " + e.message };
+      }
+      // New credentials deserve a fresh attempt even if the last id was rejected.
+      dc.fatal = false;
+      dc.error = null;
+      teardown(null);
+      loadConfig();
+      connect();
+      return { ok: true };
+    }
+    case "clearConfig": {
+      try { fs.unlinkSync(appFile()); } catch (e) {}
+      try { fs.unlinkSync(tokenFile()); } catch (e) {}
+      dc.clientId = ""; dc.clientSecret = "";
+      dc.fatal = false; dc.error = null;
+      teardown(null);
+      return { ok: true };
+    }
     case "authorize": return authorize();
     case "reconnect":
       dc.fatal = false; dc.error = null;
