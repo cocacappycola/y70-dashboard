@@ -107,9 +107,20 @@ V1's launcher chain.
 something you click, and clicking it would activate the window — the one thing
 V2 exists to prevent. It is there because being able to find the app matters too.
 
-To run it without building, `npm start` or [`launch-v2.bat`](launch-v2.bat)
-(which prefers the built app when it finds one). ~350 MB of Electron lives in
-`v2/node_modules`; both that and `v2/dist` are git-ignored.
+[`launch-v2.bat`](launch-v2.bat) finds the app wherever it is: the installed
+copy first, then the newest `v2/dist*` build, then Electron from source.
+
+> Windows sometimes keeps a handle on `dist/win-unpacked/resources/app.asar`
+> after the app exits, which makes the next `npm run dist` fail with `EBUSY`.
+> Building to a fresh directory works, which is why the launcher picks the most
+> recent `dist*` rather than a fixed one. Stale folders delete after a reboot.
+>
+> Keep `.bat` and `.vbs` files **pure ASCII** — cmd.exe reads them in the OEM
+> codepage, so a UTF-8 em dash inside a `REM` corrupts the line and cmd starts
+> executing the comment.
+
+~350 MB of Electron lives in `v2/node_modules`; that and every `v2/dist*` are
+git-ignored.
 
 **Known limit:** a game running in *exclusive* fullscreen owns the whole GPU
 output and will cover even a topmost window. Borderless windowed is fine — which

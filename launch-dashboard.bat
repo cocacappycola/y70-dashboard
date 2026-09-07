@@ -3,7 +3,7 @@ REM ============================================================================
 REM  Y70 Dashboard launcher
 REM  Starts the local server (if it isn't already running), waits until it is
 REM  actually accepting connections, then opens the dashboard fullscreen on the
-REM  small screen (Windows display 1 — the Y70 Touch panel).
+REM  small screen (Windows display 1 - the Y70 Touch panel).
 REM
 REM  Double-click to run, point a Nexus Macro Touchpad button at it, or let the
 REM  installed "Y70 Dashboard" scheduled task run it 30s after logon.
@@ -19,7 +19,7 @@ set "SCREEN=1"
 set "PORT=8888"
 set "URL=http://127.0.0.1:%PORT%"
 set "HERE=%~dp0"
-REM Strip the trailing backslash — a path ending in \" confuses cmd quoting.
+REM Strip the trailing backslash - a path ending in \" confuses cmd quoting.
 if "%HERE:~-1%"=="\" set "HERE=%HERE:~0,-1%"
 
 REM ---- 1. Locate node --------------------------------------------------------

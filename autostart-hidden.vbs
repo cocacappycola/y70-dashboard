@@ -41,7 +41,7 @@ End If
 If Not fso.FileExists(bat) Then WScript.Quit 1
 
 ' Let the rest of startup finish first so the dashboard comes up without
-' competing for disk/CPU — this is the "boot settle" period.
+' competing for disk/CPU - this is the "boot settle" period.
 If delaySec > 0 Then WScript.Sleep delaySec * 1000
 
 ' 0 = hidden window, False = don't block.
