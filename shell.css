@@ -68,7 +68,10 @@ html, body {
 .sec-title {
   font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
   color: var(--sub); margin: 10px 0 8px;
+  /* Flex so a hint can be pushed to the far end of the line by .spacer. */
+  display: flex; align-items: baseline; flex-wrap: wrap;
 }
+.sec-title .spacer { flex: 1 1 0; min-width: 0; }
 .tile-row { display: flex; gap: 10px; flex-wrap: wrap; }
 .tile {
   display: flex; align-items: center; gap: 10px;
