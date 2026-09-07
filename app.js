@@ -100,10 +100,18 @@ async function beginLogin() {
     scope: SCOPES,
     state,
   });
-  // Spotify's login page refuses to render inside an iframe — when embedded in
-  // the shell, navigate the top-level window instead (same origin).
-  const nav = window.top && window.top !== window.self ? window.top : window;
-  nav.location = AUTH_URL + "?" + params.toString();
+  const url = AUTH_URL + "?" + params.toString();
+  // Spotify's login page refuses to render inside an iframe, so it cannot happen
+  // here. Hand it to the shell, which knows whether it is a browser tab (where
+  // it navigates the top-level window) or the native panel (where it needs a
+  // real, focusable popup — the panel window takes no keyboard input at all).
+  if (window.top && window.top !== window.self) {
+    try {
+      window.top.postMessage({ type: "y70:auth", url }, "*");
+      return;
+    } catch (e) { /* fall through to navigating ourselves */ }
+  }
+  window.location = url;
 }
 
 async function exchangeCode(code) {

@@ -551,6 +551,26 @@ function wireNative() {
   native.getKeyboardMode().then(setKeyboardIndicator).catch(() => {});
   native.onKeyboardMode(setKeyboardIndicator);
   $("#kb-toggle").addEventListener("pointerup", () => native.setKeyboardMode(!keyboardMode));
+
+  // Start with Windows / taskbar presence, read back from the OS rather than
+  // remembered here, so the buttons always show the truth.
+  const paint = (el, on, label) => { el.textContent = label + (on ? ": on" : ": off"); el.classList.toggle("on", !!on); };
+  const auto = $("#native-autostart"), tb = $("#native-taskbar");
+  native.getAutoStart().then((v) => paint(auto, v, "Start with Windows")).catch(() => {});
+  // Say so rather than quietly misbehaving: run from source, the Run key is
+  // written under Electron's own name and does not start the dashboard.
+  native.isPackaged().then((packaged) => {
+    if (!packaged) auto.title = "Only takes effect in the installed build";
+  }).catch(() => {});
+  native.getShowInTaskbar().then((v) => paint(tb, v, "Taskbar icon")).catch(() => {});
+  auto.addEventListener("pointerup", async () => {
+    const on = await native.setAutoStart(!auto.classList.contains("on"));
+    paint(auto, on, "Start with Windows");
+  });
+  tb.addEventListener("pointerup", async () => {
+    const on = await native.setShowInTaskbar(!tb.classList.contains("on"));
+    paint(tb, on, "Taskbar icon");
+  });
   $("#native-reload").addEventListener("pointerup", () => native.reload());
   $("#native-quit").addEventListener("pointerup", () => native.quit());
 }
@@ -604,6 +624,15 @@ window.addEventListener("message", (e) => {
 
   // A widget asking to borrow the keyboard (see the Notes widget).
   if (d.type === "y70:keyboard") { relayKeyboardRequest(d.on); return; }
+
+  // Spotify sign-in. In a browser this is just a top-level navigation; in the
+  // native panel it has to be a separate focusable window, because this one
+  // deliberately never takes focus and so can never accept a password.
+  if (d.type === "y70:auth" && d.url) {
+    if (native) native.openAuth(d.url);
+    else window.location = d.url;
+    return;
+  }
 
   if (d.type === "y70:cmd") {
     const sp = document.getElementById("app-spotify");

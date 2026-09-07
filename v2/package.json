@@ -2,12 +2,95 @@
   "name": "y70-dashboard",
   "version": "2.0.0",
   "private": true,
-  "description": "Native shell for the HYTE Y70 Touch dashboard — a window that never steals focus.",
+  "description": "Native shell for the HYTE Y70 Touch dashboard \u2014 a window that never steals focus.",
+  "author": "Cappy",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.cappy.y70dashboard",
+    "productName": "Y70 Dashboard",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build",
+        "to": "build",
+        "filter": [
+          "icon.ico",
+          "tray.png"
+        ]
+      },
+      {
+        "from": "..",
+        "to": "dashboard",
+        "filter": [
+          "server.js",
+          "discord.js",
+          "config.js",
+          "theme.js",
+          "weather-bg.js",
+          "app.js",
+          "shell.js",
+          "weather-app.js",
+          "index.html",
+          "shell.html",
+          "weather-app.html",
+          "widget-*.html",
+          "styles.css",
+          "shell.css",
+          "weather-app.css",
+          "pcstats.ps1",
+          "syscontrol.ps1",
+          "discord-app.example.json"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Y70 Dashboard",
+      "uninstallDisplayName": "Y70 Dashboard"
+    },
+    "portable": {
+      "artifactName": "Y70-Dashboard-portable-${version}.exe"
+    }
   },
   "devDependencies": {
-    "electron": "^41.7.1"
+    "electron": "^41.7.1",
+    "electron-builder": "^26.0.12"
+  },
+  "overrides": {
+    "@noble/hashes": "1.8.0"
   }
 }

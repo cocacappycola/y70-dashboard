@@ -6,8 +6,9 @@ discord-token.json
 # Local state, not code.
 notes.txt
 
-# Dependencies (V2 app shell).
+# Dependencies and build output (V2 app shell).
 node_modules/
+v2/dist/
 
 # Windows / editor noise.
 Thumbs.db

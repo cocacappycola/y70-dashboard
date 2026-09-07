@@ -143,6 +143,9 @@ body.is-native .native-only { display: flex !important; }
 }
 body.keyboard-mode #kb-banner { display: flex; }
 body.keyboard-mode #topbar .grip { opacity: 0; }
+/* A native toggle that is currently on. */
+.set-reset.on { border-color: var(--trim); color: var(--trim); }
+.tile-row.native-only { flex-wrap: wrap; }
 
 .app-tile.active { border-color: var(--trim); background: var(--panel-2); }
 .wid-tile.on { border-color: var(--trim); }

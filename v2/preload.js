@@ -19,6 +19,19 @@ contextBridge.exposeInMainWorld("y70native", {
     ipcRenderer.on("y70:keyboard-mode", (_e, on) => fn(!!on));
   },
 
+  // Opens a normal, focusable window for an OAuth sign-in and closes it again
+  // once the dashboard has the token.
+  openAuth: (url) => ipcRenderer.invoke("y70:auth", url),
+
+  // True only in the installed build. Start-at-login is only reliable there.
+  isPackaged: () => ipcRenderer.invoke("y70:packaged"),
+
+  // Windows start-at-login, written natively to the Run key.
+  getAutoStart: () => ipcRenderer.invoke("y70:autostart"),
+  setAutoStart: (on) => ipcRenderer.invoke("y70:autostart", !!on),
+  getShowInTaskbar: () => ipcRenderer.invoke("y70:taskbar"),
+  setShowInTaskbar: (on) => ipcRenderer.invoke("y70:taskbar", !!on),
+
   reload: () => ipcRenderer.invoke("y70:reload"),
   quit: () => ipcRenderer.invoke("y70:quit"),
   displays: () => ipcRenderer.invoke("y70:displays"),

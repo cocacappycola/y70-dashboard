@@ -22,6 +22,19 @@ set "HERE=%~dp0"
 if "%HERE:~-1%"=="\" set "HERE=%HERE:~0,-1%"
 set "APP=%HERE%\v2"
 set "ELECTRON=%APP%\node_modules\electron\dist\electron.exe"
+set "PACKAGED=%APP%\dist\win-unpacked\Y70 Dashboard.exe"
+
+REM Prefer the built app when it exists: it carries the icon and the real
+REM process name, and its "Start with Windows" toggle actually works.
+if exist "%PACKAGED%" (
+  tasklist /fi "imagename eq Y70 Dashboard.exe" 2>nul | find /i "Y70 Dashboard.exe" >nul
+  if not errorlevel 1 (
+    echo Dashboard is already running.
+    exit /b 0
+  )
+  start "" "%PACKAGED%"
+  exit /b 0
+)
 
 if not exist "%ELECTRON%" (
   echo [ERROR] Electron is not installed yet.
