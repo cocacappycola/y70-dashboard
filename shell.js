@@ -736,6 +736,16 @@ function wireNative() {
     paintLock(await native.setPassiveLock(!lock.classList.contains("on")));
   });
 
+  // Version + updates.
+  native.version().then((v) => { $("#app-version").textContent = "v" + v; }).catch(() => {});
+  native.onUpdate(paintUpdate);
+  native.updateState().then(paintUpdate).catch(() => {});
+  $("#update-check").addEventListener("pointerup", async () => {
+    $("#update-status").textContent = "checking\u2026";
+    paintUpdate(await native.checkUpdate());
+  });
+  $("#update-install").addEventListener("pointerup", () => native.installUpdate());
+
   // Start with Windows / taskbar presence, read back from the OS rather than
   // remembered here, so the buttons always show the truth.
   const paint = (el, on, label) => { el.textContent = label + (on ? ": on" : ": off"); el.classList.toggle("on", !!on); };
@@ -757,6 +767,30 @@ function wireNative() {
   });
   $("#native-reload").addEventListener("pointerup", () => native.reload());
   $("#native-quit").addEventListener("pointerup", () => native.quit());
+}
+
+// The updater's own words, in plain ones.
+function paintUpdate(u) {
+  if (!u) return;
+  const status = $("#update-status");
+  const install = $("#update-install");
+  if (!status) return;
+  const text = {
+    idle: "",
+    checking: "checking\u2026",
+    current: "up to date",
+    downloading: u.percent ? "downloading " + u.percent + "%" : "downloading\u2026",
+    ready: "v" + (u.version || "?") + " ready",
+    // Run from source there is nothing to replace, so say that rather than
+    // pretending it is up to date.
+    dev: "dev build \u2014 updates off",
+    error: "update failed",
+  }[u.status] || "";
+  status.textContent = text;
+  status.title = u.error || "";
+  install.style.display = u.status === "ready" ? "" : "none";
+  const check = $("#update-check");
+  if (check) check.disabled = u.status === "checking" || u.status === "downloading";
 }
 
 function setKeyboardIndicator(on) {

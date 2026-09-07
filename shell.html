@@ -83,7 +83,16 @@
         <div class="sec-title">Pull-up widgets<span class="sec-hint">drag ☰ to reorder · tap to toggle</span></div>
         <div id="widget-list"></div>
 
-        <div class="sec-title native-only">Panel</div>
+        <div class="sec-title native-only">
+          Panel
+          <span class="sec-hint" id="app-version">—</span>
+          <span class="spacer"></span>
+          <span class="sec-hint" id="update-status"></span>
+        </div>
+        <div class="tile-row native-only">
+          <button class="set-reset" id="update-check">Check for updates</button>
+          <button class="set-reset" id="update-install" style="display:none">Restart to update</button>
+        </div>
         <div class="tile-row native-only">
           <button class="set-reset" id="kb-toggle">Keyboard mode: off</button>
           <button class="set-reset" id="passive-lock">Never take focus: off</button>

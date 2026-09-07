@@ -1,6 +1,6 @@
 {
   "name": "y70-dashboard",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "private": true,
   "description": "Native shell for the HYTE Y70 Touch dashboard \u2014 a window that never steals focus.",
   "author": "Cappy",

@@ -550,7 +550,17 @@ ipcMain.handle("y70:update-check", () => {
   return updateState;
 });
 ipcMain.handle("y70:update-install", () => installUpdate());
-ipcMain.handle("y70:version", () => app.getVersion());
+// app.getVersion() reads our package.json only when Electron loaded this
+// folder as the app; from a test harness it hands back Electron's own version
+// instead. Read the manifest directly so the drawer never lies about the build.
+let appVersion = null;
+function getAppVersion() {
+  if (appVersion) return appVersion;
+  try { appVersion = require(path.join(__dirname, "package.json")).version; }
+  catch (e) { appVersion = app.getVersion(); }
+  return appVersion;
+}
+ipcMain.handle("y70:version", () => getAppVersion());
 ipcMain.handle("y70:displays", () => screen.getAllDisplays().map((d, i) => ({
   index: i, bounds: d.bounds, primary: d.id === screen.getPrimaryDisplay().id,
 })));
