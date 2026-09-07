@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Web</title>
+  <script src="/theme.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%; overflow: hidden;
+      background: var(--v-bg, #0b0b10); color: var(--v-text, #f2f2f7);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; }
+
+    /* ---- Toolbar. Stays ordinary HTML; the site is a native view below it. ---- */
+    #bar {
+      flex-shrink: 0; display: flex; align-items: center; gap: 5px;
+      padding: 6px 8px; background: var(--v-bg-2, #131319);
+      border-bottom: 1px solid var(--v-card-line, rgba(255,255,255,.08));
+    }
+    .tb {
+      background: var(--v-card, rgba(255,255,255,.06));
+      border: 1px solid var(--v-card-line, rgba(255,255,255,.09));
+      color: var(--v-sub, #a6a6b3); border-radius: 8px;
+      min-width: 38px; height: 38px; padding: 0 9px;
+      font-size: 14px; font-family: inherit; cursor: pointer; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .tb:active { background: var(--v-surface-2, rgba(255,255,255,.14)); }
+    .tb:disabled { opacity: .3; }
+    .tb.on { background: var(--v-accent, #ff3b5c); border-color: transparent; color: var(--v-accent-ink, #fff); }
+    .site {
+      font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+      color: var(--v-accent, #ff3b5c); padding: 0 6px; white-space: nowrap;
+    }
+    .spacer { flex: 1; }
+    #speed {
+      -webkit-appearance: none; appearance: none; width: 70px; height: 38px;
+      background: transparent; flex-shrink: 0; margin: 0;
+    }
+    #speed::-webkit-slider-runnable-track {
+      height: 5px; border-radius: 3px;
+      background: linear-gradient(to right, var(--v-accent, #ff3b5c) var(--fill, 50%), var(--v-surface-2, #2a2a33) var(--fill, 50%));
+    }
+    #speed::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%;
+      background: var(--v-text, #fff); margin-top: -5px;
+    }
+    #speed:disabled { opacity: .3; }
+
+    /* The native view is parked exactly over this box. */
+    #slot { flex: 1; min-height: 0; background: #000; position: relative; }
+    #msg {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; text-align: center;
+      padding: 30px; gap: 10px; color: var(--v-sub, #a6a6b3); font-size: 13px; line-height: 1.6;
+    }
+    #msg b { color: var(--v-text, #fff); font-size: 15px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="bar">
+      <span class="site" id="site-name">—</span>
+      <button class="tb" id="back" title="Back">‹</button>
+      <button class="tb" id="fwd" title="Forward">›</button>
+      <button class="tb" id="home" title="Home">⌂</button>
+      <button class="tb" id="reload" title="Reload">↻</button>
+      <span class="spacer"></span>
+      <button class="tb" id="ua" title="Phone or desktop layout">📱</button>
+      <button class="tb" id="auto" title="Auto scroll">▼</button>
+      <input id="speed" type="range" min="1" max="10" value="5" title="Auto-scroll speed" />
+    </div>
+    <div id="slot">
+      <div id="msg">
+        <b>This app needs the desktop shell</b>
+        <div>YouTube and TikTok refuse to be embedded in a normal page, so they
+        run in a native browser view that only the V2 app can create.</div>
+        <div>Run <b>launch-v2.bat</b> and open this app there.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+
+    const SITES = {
+      youtube: { name: "YouTube", home: "https://m.youtube.com/", mode: "scroll", mobile: true },
+      shorts:  { name: "Shorts",  home: "https://m.youtube.com/shorts", mode: "next", mobile: true },
+      // A virtualised feed: scrolling by pixels does nothing, but Down advances
+      // one video. Verified against YouTube Shorts, which behaves the same.
+      tiktok:  { name: "TikTok",  home: "https://www.tiktok.com/foryou", mode: "next", mobile: true },
+    };
+
+    const key = new URLSearchParams(location.search).get("site") || "youtube";
+    const site = SITES[key] || SITES.youtube;
+    document.title = site.name;
+    $("site-name").textContent = site.name;
+
+    let auto = false, timer = null, mobile = site.mobile, native = false;
+
+    // ---- Talking to the shell ---------------------------------------------
+    // This page is inside an iframe, so it cannot reach the native bridge
+    // itself; the shell relays, and adds the iframe's own offset to the rect.
+    let seq = 0;
+    const waiting = new Map();
+    function ask(action, payload) {
+      return new Promise((resolve) => {
+        const id = ++seq;
+        waiting.set(id, resolve);
+        setTimeout(() => { if (waiting.delete(id)) resolve(null); }, 4000);
+        try {
+          window.parent.postMessage({ type: "y70:web", id, site: key, action, ...payload }, "*");
+        } catch (e) { waiting.delete(id); resolve(null); }
+      });
+    }
+    window.addEventListener("message", (e) => {
+      const d = e.data;
+      if (!d || d.type !== "y70:web-reply") return;
+      const fn = waiting.get(d.id);
+      if (fn) { waiting.delete(d.id); fn(d.result); }
+    });
+
+    // ---- Placing the native view -------------------------------------------
+    let lastRect = "";
+    function place(force) {
+      const r = $("slot").getBoundingClientRect();
+      const rect = { x: r.left, y: r.top, width: r.width, height: r.height };
+      const sig = [rect.x, rect.y, rect.width, rect.height, document.hidden].join(",");
+      if (!force && sig === lastRect) return;
+      lastRect = sig;
+      ask("place", {
+        rect,
+        url: site.home,
+        mobile,
+        visible: !document.hidden,
+      }).then((res) => {
+        if (res && res.ok) {
+          native = true;
+          $("msg").style.display = "none";
+        }
+      });
+    }
+
+    // The dock resizes, the drawer opens, the panel rotates: just re-check.
+    setInterval(() => place(false), 500);
+    addEventListener("resize", () => place(true));
+    document.addEventListener("visibilitychange", () => {
+      place(true);
+      if (document.hidden) clearInterval(timer); else schedule();
+    });
+
+    // ---- Navigation state ---------------------------------------------------
+    async function syncNav() {
+      const st = await ask("state", {});
+      if (!st || !st.exists) return;
+      $("back").disabled = !st.canGoBack;
+      $("fwd").disabled = !st.canGoForward;
+    }
+    setInterval(syncNav, 1500);
+
+    // ---- Auto scroll ---------------------------------------------------------
+    // Two shapes of site, two behaviours:
+    //   scroll — nudge the page down continuously (an ordinary feed)
+    //   next   — send Down, advancing one video (Shorts, TikTok)
+    function tick() {
+      if (!auto) return;
+      const speed = Number($("speed").value);
+      if (site.mode === "next") ask("next", {});
+      else ask("scroll", { arg: speed * 40 });
+    }
+
+    function schedule() {
+      clearInterval(timer);
+      if (!auto || document.hidden) return;
+      const speed = Number($("speed").value);
+      const ms = site.mode === "next"
+        ? Math.round(16000 / speed)                  // 1 = 16s a clip, 10 = 1.6s
+        : Math.round(1000 / (speed * 0.9 + 1));
+      timer = setInterval(tick, ms);
+      if (site.mode === "next") tick();              // respond to the tap at once
+    }
+
+    function setAuto(on) {
+      auto = !!on;
+      $("auto").classList.toggle("on", auto);
+      $("auto").textContent = auto ? "⏸" : "▼";
+      $("auto").title = auto ? "Stop auto scroll" : "Auto scroll";
+      schedule();
+    }
+
+    // ---- Wiring --------------------------------------------------------------
+    $("back").addEventListener("pointerup", () => ask("back", {}).then(syncNav));
+    $("fwd").addEventListener("pointerup", () => ask("forward", {}).then(syncNav));
+    $("home").addEventListener("pointerup", () => ask("load", { arg: site.home }).then(syncNav));
+    $("reload").addEventListener("pointerup", () => ask("reload", {}));
+    $("auto").addEventListener("pointerup", () => setAuto(!auto));
+    $("ua").addEventListener("pointerup", () => {
+      mobile = !mobile;
+      $("ua").textContent = mobile ? "📱" : "🖥";
+      ask("useragent", { arg: mobile });
+    });
+
+    const speed = $("speed");
+    const paintSpeed = () => speed.style.setProperty("--fill", ((speed.value - 1) / 9 * 100) + "%");
+    speed.addEventListener("input", () => { paintSpeed(); if (auto) schedule(); });
+    paintSpeed();
+
+    place(true);
+    syncNav();
+  </script>
+</body>
+</html>

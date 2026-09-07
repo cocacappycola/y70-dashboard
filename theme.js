@@ -19,22 +19,22 @@
   const PRESETS = [
     {
       id: "main-purple", name: "Main Purple",
-      bg: "#000000", trim: "#A85CD6", weather: "#A85CD6", claude: "#A85CD6", pc: "#A85CD6", calc: "#A85CD6", media: "#A85CD6", tools: "#A85CD6", discord: "#A85CD6",
+      bg: "#000000", trim: "#A85CD6", weather: "#A85CD6", claude: "#A85CD6", pc: "#A85CD6", calc: "#A85CD6", media: "#A85CD6", tools: "#A85CD6", discord: "#A85CD6", web: "#A85CD6",
       tintBg: true,
     },
     {
       id: "default", name: "Default",
-      bg: "#0a0a0c", trim: "#1ed760", weather: "#6cb6ff", claude: "#d97757", pc: "#42d6c3", calc: "#7c5cff", media: "#1ed760", tools: "#e8d44d", discord: "#5865f2",
+      bg: "#0a0a0c", trim: "#1ed760", weather: "#6cb6ff", claude: "#d97757", pc: "#42d6c3", calc: "#7c5cff", media: "#1ed760", tools: "#e8d44d", discord: "#5865f2", web: "#ff3b5c",
       tintBg: false,
     },
     {
       id: "midnight-ice", name: "Midnight Ice",
-      bg: "#03060c", trim: "#5ad1ff", weather: "#5ad1ff", claude: "#7aa2ff", pc: "#8fe3d0", calc: "#7aa2ff", media: "#5ad1ff", tools: "#b6c7ff", discord: "#8aa0ff",
+      bg: "#03060c", trim: "#5ad1ff", weather: "#5ad1ff", claude: "#7aa2ff", pc: "#8fe3d0", calc: "#7aa2ff", media: "#5ad1ff", tools: "#b6c7ff", discord: "#8aa0ff", web: "#8fd4ff",
       tintBg: true,
     },
     {
       id: "ember", name: "Ember",
-      bg: "#0a0503", trim: "#ff7a3d", weather: "#ffb648", claude: "#ff5f56", pc: "#ffd166", calc: "#ff9f43", media: "#ff7a3d", tools: "#ffd166", discord: "#ff8f6b",
+      bg: "#0a0503", trim: "#ff7a3d", weather: "#ffb648", claude: "#ff5f56", pc: "#ffd166", calc: "#ff9f43", media: "#ff7a3d", tools: "#ffd166", discord: "#ff8f6b", web: "#ff5f56",
       tintBg: true,
     },
   ];
@@ -128,6 +128,7 @@
       media: (t && t.media) || base.media,
       tools: (t && t.tools) || base.tools,
       discord: (t && t.discord) || base.discord,
+      web: (t && t.web) || base.web,
       tintBg: t && typeof t.tintBg === "boolean" ? t.tintBg : base.tintBg,
     };
   }
@@ -182,6 +183,7 @@
     family("--m-", t.bg, t.media, out);      // Universal player + lyrics
     family("--u-", t.bg, t.tools, out);      // Audio hub, timer, notes
     family("--d-", t.bg, t.discord, out);    // Discord widget
+    family("--v-", t.bg, t.web, out);        // YouTube / TikTok web apps
     // The shell's own backdrop is the chosen background *exactly* — pick black
     // and you get black. (family() would otherwise leave --t-bg 5% tinted; the
     // widgets keep that tint via --w-bg / --c-bg, which is what gives each one

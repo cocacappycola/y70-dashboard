@@ -15,10 +15,12 @@
 //  Everything else is unchanged: this loads the same local server and the same
 //  pages V1 used, so there is one copy of the dashboard, not two.
 // ============================================================================
-const { app, BrowserWindow, screen, ipcMain, Tray, Menu, nativeImage, shell } = require("electron");
+const { app, BrowserWindow, WebContentsView, screen, ipcMain, Tray, Menu,
+        nativeImage, shell } = require("electron");
 const path = require("path");
 const net = require("net");
 const { spawn } = require("child_process");
+const { autoUpdater } = require("electron-updater");
 
 // Where the dashboard's pages and server live. When packaged they are copied
 // in as an extraResource, because __dirname points inside app.asar and the
@@ -136,6 +138,7 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+
       backgroundThrottling: false,   // the dock keeps updating while unfocused
     },
   });
@@ -237,6 +240,167 @@ function setKeyboardMode(on) {
   return keyboardMode;
 }
 
+// ---------------------------------------------------------------- web apps --
+// YouTube and TikTok refuse to be framed (X-Frame-Options / frame-ancestors),
+// and <webview> is only available in a top-level frame — the shell mounts apps
+// in iframes, so neither works. Instead each site gets a WebContentsView: a real
+// browser view parented to the window, which the page positions by reporting
+// where its content area is. The toolbar stays as ordinary HTML above it.
+const webViews = new Map();          // site key -> WebContentsView
+
+// A phone user agent by default: the panel is 682x2560, so these sites' mobile
+// layouts fit it far better than their desktop ones.
+const MOBILE_UA =
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/140.0.0.0 Mobile Safari/537.36";
+
+// "Open in the app" interstitials and custom-scheme handoffs.
+function isAppLink(u) {
+  const url = String(u || "");
+  if (!/^https?:/i.test(url)) return true;                 // snssdk1233://, tiktok://
+  return /(^|\.)onelink\.me\/|snssdk|\/download\/app|app\.link\//i.test(url);
+}
+
+function getWebView(site) { return webViews.get(site) || null; }
+
+function makeWebView(site, url, mobile) {
+  const view = new WebContentsView({
+    webPreferences: {
+      // One persistent partition for all the web apps, so a sign-in sticks and
+      // stays separate from the dashboard's own origin.
+      partition: "persist:y70web",
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  });
+  if (mobile) view.webContents.setUserAgent(MOBILE_UA);
+  view.setBorderRadius && view.setBorderRadius(0);
+  view.setVisible(false);
+  win.contentView.addChildView(view);
+  view.webContents.loadURL(url);
+  // Keep target=_blank inside the panel rather than firing up a browser.
+  view.webContents.setWindowOpenHandler(({ url: u }) => {
+    if (isAppLink(u)) return { action: "deny" };
+    view.webContents.loadURL(u);
+    return { action: "deny" };
+  });
+  // TikTok's mobile site answers a swipe or a Down key by trying to bounce you
+  // into the phone app: it navigates to snssdk.../onelink.me, which would take
+  // the feed away entirely. Cancel those and stay on the page.
+  view.webContents.on("will-navigate", (e, u) => { if (isAppLink(u)) e.preventDefault(); });
+  view.webContents.on("will-redirect", (e, u) => { if (isAppLink(u)) e.preventDefault(); });
+  webViews.set(site, view);
+  return view;
+}
+
+function placeWebView(site, opts) {
+  if (!win || win.isDestroyed()) return { ok: false };
+  let view = getWebView(site);
+  if (!view) view = makeWebView(site, opts.url, opts.mobile);
+  if (!opts.visible || !opts.rect) {
+    view.setVisible(false);
+    return { ok: true, visible: false };
+  }
+  const r = opts.rect;
+  view.setBounds({
+    x: Math.round(r.x), y: Math.round(r.y),
+    width: Math.max(0, Math.round(r.width)), height: Math.max(0, Math.round(r.height)),
+  });
+  view.setVisible(true);
+  return { ok: true, visible: true };
+}
+
+function hideAllWebViews() {
+  for (const v of webViews.values()) { try { v.setVisible(false); } catch (e) {} }
+}
+
+function webAction(site, action, arg) {
+  const view = getWebView(site);
+  if (!view) return { ok: false, error: "not created" };
+  const wc = view.webContents;
+  try {
+    switch (action) {
+      case "back": if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack(); break;
+      case "forward": if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward(); break;
+      case "reload": wc.reload(); break;
+      case "load": wc.loadURL(String(arg)); break;
+      case "scroll":
+        wc.executeJavaScript("window.scrollBy({top:" + Number(arg) + ",behavior:'smooth'})").catch(() => {});
+        break;
+      case "next":
+        // Down advances one clip on a virtualised feed (Shorts, TikTok), where
+        // scrolling by pixels does nothing.
+        wc.focus();
+        wc.sendInputEvent({ type: "keyDown", keyCode: "Down" });
+        wc.sendInputEvent({ type: "char", keyCode: "Down" });
+        wc.sendInputEvent({ type: "keyUp", keyCode: "Down" });
+        break;
+      case "useragent":
+        wc.setUserAgent(arg ? MOBILE_UA : "");
+        wc.reload();
+        break;
+      default: return { ok: false, error: "unknown action" };
+    }
+  } catch (e) { return { ok: false, error: e.message }; }
+  return { ok: true };
+}
+
+function webState(site) {
+  const view = getWebView(site);
+  if (!view) return { exists: false };
+  const wc = view.webContents;
+  return {
+    exists: true,
+    url: wc.getURL(),
+    title: wc.getTitle(),
+    loading: wc.isLoading(),
+    canGoBack: wc.navigationHistory.canGoBack(),
+    canGoForward: wc.navigationHistory.canGoForward(),
+  };
+}
+
+// ---------------------------------------------------------------- update ----
+// Reads GitHub Releases. The repo is public, so no token is needed anywhere and
+// nothing sensitive ships in the installer.
+let updateState = { status: "idle", version: null, percent: 0, error: null, notes: null };
+
+function setUpdate(patch) {
+  updateState = { ...updateState, ...patch };
+  if (win && !win.isDestroyed()) win.webContents.send("y70:update", updateState);
+  updateTray();
+}
+
+function initUpdater() {
+  // Unpackaged there is nothing to replace, and electron-updater throws.
+  if (!app.isPackaged) { setUpdate({ status: "dev" }); return; }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("checking-for-update", () => setUpdate({ status: "checking", error: null }));
+  autoUpdater.on("update-not-available", () => setUpdate({ status: "current" }));
+  autoUpdater.on("update-available", (i) => setUpdate({ status: "downloading", version: i.version, notes: i.releaseName || null }));
+  autoUpdater.on("download-progress", (p) => setUpdate({ status: "downloading", percent: Math.round(p.percent) }));
+  autoUpdater.on("update-downloaded", (i) => setUpdate({ status: "ready", version: i.version, percent: 100 }));
+  autoUpdater.on("error", (e) => setUpdate({ status: "error", error: String(e && e.message || e) }));
+
+  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  // A moment after boot so it never competes with the panel coming up, then
+  // every six hours. The panel runs for weeks at a time.
+  setTimeout(check, 20000);
+  const iv = setInterval(check, 6 * 60 * 60 * 1000);
+  if (iv.unref) iv.unref();
+}
+
+function installUpdate() {
+  if (updateState.status !== "ready") return false;
+  app.isQuiting = true;
+  // false, true = don't force-close other instances, do restart afterwards.
+  autoUpdater.quitAndInstall(false, true);
+  return true;
+}
+
 // ---------------------------------------------------------------- tray -----
 // With no frame and no taskbar button, the tray is the only way to quit.
 
@@ -280,6 +444,10 @@ function updateTray() {
     { label: "Show in taskbar", type: "checkbox", checked: !!showInTaskbar,
       click: () => setShowInTaskbar(!showInTaskbar) },
     { type: "separator" },
+    ...(updateState.status === "ready"
+      ? [{ label: "Restart to update to " + updateState.version, click: () => installUpdate() },
+         { type: "separator" }]
+      : []),
     { label: "Reload", click: () => win && win.reload() },
     { label: "Move to this display",
       click: () => {
@@ -309,7 +477,19 @@ ipcMain.handle("y70:keyboard", (_e, on) => setKeyboardMode(on));
 ipcMain.handle("y70:keyboard-state", () => keyboardMode);
 ipcMain.handle("y70:quit", () => { app.isQuiting = true; app.quit(); });
 ipcMain.handle("y70:reload", () => { if (win) win.reload(); });
+ipcMain.handle("y70:web-place", (_e, site, opts) => placeWebView(String(site), opts || {}));
+ipcMain.handle("y70:web-hide-all", () => { hideAllWebViews(); return true; });
+ipcMain.handle("y70:web-action", (_e, site, action, arg) => webAction(String(site), String(action), arg));
+ipcMain.handle("y70:web-state", (_e, site) => webState(String(site)));
 ipcMain.handle("y70:packaged", () => app.isPackaged);
+ipcMain.handle("y70:update-state", () => updateState);
+ipcMain.handle("y70:update-check", () => {
+  if (!app.isPackaged) return { ...updateState, status: "dev" };
+  autoUpdater.checkForUpdates().catch(() => {});
+  return updateState;
+});
+ipcMain.handle("y70:update-install", () => installUpdate());
+ipcMain.handle("y70:version", () => app.getVersion());
 ipcMain.handle("y70:displays", () => screen.getAllDisplays().map((d, i) => ({
   index: i, bounds: d.bounds, primary: d.id === screen.getPrimaryDisplay().id,
 })));
@@ -325,6 +505,7 @@ if (!app.requestSingleInstanceLock()) {
     await ensureServer();
     createWindow();
     createTray();
+    initUpdater();
     // Displays come and go (the Y70 sleeps with the PC); re-place the window.
     screen.on("display-added", reposition);
     screen.on("display-removed", reposition);

@@ -5,6 +5,9 @@
 const APPS = {
   spotify: { title: "Spotify", src: "/index.html" },
   weather: { title: "Weather", src: "/weather-app.html" },
+  youtube: { title: "YouTube", src: "/app-web.html?site=youtube" },
+  shorts: { title: "Shorts", src: "/app-web.html?site=shorts" },
+  tiktok: { title: "TikTok", src: "/app-web.html?site=tiktok" },
 };
 
 const WIDGETS = {
@@ -123,6 +126,7 @@ function setApp(name) {
   }
   document.querySelectorAll(".app-tile").forEach((t) =>
     t.classList.toggle("active", t.dataset.app === name));
+  syncWebViews();
   renderMini();
 }
 
@@ -231,6 +235,7 @@ const backdrop = $("#drawer-backdrop");
 function openDrawer(open) {
   drawer.classList.toggle("open", open);
   backdrop.classList.toggle("hidden", !open);
+  syncWebViews();
   // Always reopen on the main view, never mid-settings.
   if (!open) showSettings(false);
 }
@@ -252,7 +257,7 @@ function wireDrawer() {
     const h = drawer.getBoundingClientRect().height;
     const t = Math.min(0, -h + Math.max(0, dy));
     drawer.style.transform = `translateY(${t}px)`;
-    if (dy > 10) backdrop.classList.remove("hidden");
+    if (dy > 10) { backdrop.classList.remove("hidden"); syncWebViews(); }
   });
   topbar.addEventListener("pointerup", (e) => {
     if (!dragging) return;
@@ -458,7 +463,7 @@ function retag(t) {
     sameColor(p.weather, t.weather) && sameColor(p.claude, t.claude) &&
     sameColor(p.pc, t.pc) && sameColor(p.calc, t.calc) &&
     sameColor(p.media, t.media) && sameColor(p.tools, t.tools) &&
-    sameColor(p.discord, t.discord) && p.tintBg === t.tintBg);
+    sameColor(p.discord, t.discord) && sameColor(p.web, t.web) && p.tintBg === t.tintBg);
   return { ...t, id: m ? m.id : "custom", name: m ? m.name : "Custom" };
 }
 
@@ -589,6 +594,50 @@ function relayKeyboardRequest(on) {
   native.setKeyboardMode(!!on);
 }
 
+// ---- Web apps ---------------------------------------------------------------
+// Neither YouTube nor TikTok can be framed, and <webview> only works in a
+// top-level frame, so their content is a native view owned by the main process.
+// The page draws its toolbar and says where the content belongs; this relays.
+async function handleWebMessage(source, d) {
+  const reply = (result) => {
+    try { source.postMessage({ type: "y70:web-reply", id: d.id, result }, "*"); } catch (e) {}
+  };
+  if (!native) return reply({ ok: false, error: "not the native shell" });
+
+  if (d.action === "place") {
+    const frame = document.getElementById("app-" + d.site);
+    const isActive = frame && frame.classList.contains("active");
+    // Anything drawn over the app area — the drawer and its backdrop — would be
+    // covered by a native view, which sits above all HTML. Hide it instead.
+    const covered = drawer.classList.contains("open") || !backdrop.classList.contains("hidden");
+    if (!frame || !isActive || covered || !d.visible) {
+      return reply(await native.webPlace(d.site, { visible: false }));
+    }
+    const fr = frame.getBoundingClientRect();
+    const rect = {
+      x: fr.left + d.rect.x,
+      y: fr.top + d.rect.y,
+      width: d.rect.width,
+      height: d.rect.height,
+    };
+    return reply(await native.webPlace(d.site, {
+      visible: true, rect, url: d.url, mobile: d.mobile,
+    }));
+  }
+  if (d.action === "state") return reply(await native.webState(d.site));
+  return reply(await native.webAction(d.site, d.action, d.arg));
+}
+
+// Switching apps or opening the drawer must take the native view down with it,
+// otherwise it hangs over whatever is now on top.
+function syncWebViews() {
+  if (!native) return;
+  const covered = drawer.classList.contains("open") || !backdrop.classList.contains("hidden");
+  const activeIsWeb = /^(youtube|shorts|tiktok)$/.test(state.app);
+  if (covered || !activeIsWeb) native.webHideAll();
+  // When it should be visible the app page re-places it on its own next tick.
+}
+
 // ---- Mini player -----------------------------------------------------------
 // A slim now-playing strip that appears automatically whenever you leave the
 // Spotify app while something is loaded, and disappears when you go back.
@@ -624,6 +673,11 @@ window.addEventListener("message", (e) => {
 
   // A widget asking to borrow the keyboard (see the Notes widget).
   if (d.type === "y70:keyboard") { relayKeyboardRequest(d.on); return; }
+
+  // A web app (YouTube / TikTok) talking to its native view. The page reports
+  // rectangles in its own coordinates; the offset of its iframe within the
+  // window is added here, because only the shell knows that.
+  if (d.type === "y70:web") { handleWebMessage(e.source, d); return; }
 
   // Spotify sign-in. In a browser this is just a top-level navigation; in the
   // native panel it has to be a separate focusable window, because this one

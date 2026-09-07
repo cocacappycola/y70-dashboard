@@ -32,6 +32,20 @@ contextBridge.exposeInMainWorld("y70native", {
   getShowInTaskbar: () => ipcRenderer.invoke("y70:taskbar"),
   setShowInTaskbar: (on) => ipcRenderer.invoke("y70:taskbar", !!on),
 
+  // Auto-update, from the project's public GitHub Releases.
+  version: () => ipcRenderer.invoke("y70:version"),
+  updateState: () => ipcRenderer.invoke("y70:update-state"),
+  checkUpdate: () => ipcRenderer.invoke("y70:update-check"),
+  installUpdate: () => ipcRenderer.invoke("y70:update-install"),
+  onUpdate: (fn) => { ipcRenderer.on("y70:update", (_e, s) => fn(s)); },
+
+  // Web apps (YouTube / TikTok) run in a native view the main process parks
+  // over the rectangle the page reports, because neither site can be framed.
+  webPlace: (site, opts) => ipcRenderer.invoke("y70:web-place", site, opts),
+  webHideAll: () => ipcRenderer.invoke("y70:web-hide-all"),
+  webAction: (site, action, arg) => ipcRenderer.invoke("y70:web-action", site, action, arg),
+  webState: (site) => ipcRenderer.invoke("y70:web-state", site),
+
   reload: () => ipcRenderer.invoke("y70:reload"),
   quit: () => ipcRenderer.invoke("y70:quit"),
   displays: () => ipcRenderer.invoke("y70:displays"),

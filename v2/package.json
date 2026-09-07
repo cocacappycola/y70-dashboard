@@ -1,6 +1,6 @@
 {
   "name": "y70-dashboard",
-  "version": "2.0.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Native shell for the HYTE Y70 Touch dashboard \u2014 a window that never steals focus.",
   "author": "Cappy",
@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "release": "electron-builder --publish always"
   },
   "build": {
     "appId": "com.cappy.y70dashboard",
@@ -45,6 +46,7 @@
           "weather-app.js",
           "index.html",
           "shell.html",
+          "app-web.html",
           "weather-app.html",
           "widget-*.html",
           "styles.css",
@@ -84,7 +86,14 @@
     },
     "portable": {
       "artifactName": "Y70-Dashboard-portable-${version}.exe"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "cocacappycola",
+        "repo": "y70-dashboard"
+      }
+    ]
   },
   "devDependencies": {
     "electron": "^41.7.1",
@@ -92,5 +101,8 @@
   },
   "overrides": {
     "@noble/hashes": "1.8.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

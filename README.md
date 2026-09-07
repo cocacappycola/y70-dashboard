@@ -36,6 +36,52 @@ It also:
 - re-places itself when displays come and go (the Y70 sleeps with the PC),
 - reloads itself if the renderer ever dies.
 
+### Web apps (YouTube / Shorts / TikTok)
+
+These are ordinary sites, but neither will render in a frame — both send
+`X-Frame-Options` / `frame-ancestors`. Electron's `<webview>` gets around that,
+except it **only works in a top-level frame**, and the shell mounts every app in
+an iframe. Verified both facts before designing around them.
+
+So the page draws just its toolbar and reports where its content belongs, and
+the main process parks a real **`WebContentsView`** over that rectangle. The
+toolbar stays as HTML above it. Native views sit above all HTML, so the view is
+hidden whenever the drawer opens or another app is in front.
+
+- **Auto-scroll** has two behaviours, because the sites are two shapes. YouTube
+  is a scrolling page, so it nudges the page down. Shorts and TikTok are
+  virtualised feeds where scrolling by pixels does nothing, so it sends **Down**,
+  which advances one clip. The slider sets the pace — for feeds, 1 is about
+  16 seconds a clip and 10 is about 1.6.
+- **Phone layout by default.** The panel is 682x2560; these sites' mobile
+  layouts fit it far better than their desktop ones. The 📱 button switches.
+- Sign-ins persist in their own `persist:y70web` partition, kept apart from the
+  dashboard's own origin.
+
+> TikTok answers a Down key by trying to bounce you into the phone app — it
+> navigates to a `onelink.me` deep link, which would take the feed away
+> entirely. Those are cancelled, so the feed stays put. Verified for Shorts that
+> auto-scroll really does move to a different video; on TikTok the URL doesn't
+> change between clips, so give that one an eyeball.
+
+### Auto-update
+
+The app checks its own GitHub Releases 20 seconds after launch and every six
+hours, downloads in the background, and offers **Restart to update** in the tray.
+The repo is public, so no token is needed anywhere and nothing sensitive ships
+in the installer.
+
+Cut a release with:
+
+```bash
+cd v2
+npm version patch          # or edit "version" in package.json
+npm run release
+```
+
+Auto-update only runs in the installed build — there is nothing to replace when
+running from source, and the app reports its status as `dev` there instead.
+
 ### Signing in to Spotify
 
 This needed fixing for V2 and is worth knowing about. The panel window blocks
@@ -152,6 +198,9 @@ The app is now a **dashboard shell** (`shell.html`) served at `http://127.0.0.1:
   ☰ grip to reorder** — where a row sits in that list is exactly where its panel
   sits on screen, top to bottom. **Drag a panel's title bar** up/down to resize it;
   drag it to the bottom (or tap ▼) to collapse it to a slim bar; tap the bar to reopen.
+- **Web apps** — **YouTube**, **Shorts** and **TikTok** run as apps beside Spotify
+  and Weather, with back/forward/home/reload, a phone-or-desktop layout toggle
+  and an **auto-scroll** button (speed slider next to it). V2 only; see below.
 - **Scenes** — whole layouts (which app is up front, which widgets are open, at
   what height) in one tap, at the top of the drawer. Four ship with the app;
   each can be overwritten with your own arrangement and reset back again.
