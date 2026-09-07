@@ -13,6 +13,7 @@
 //    /api/lyrics  -> LRCLIB proxy (free, key-less), cached
 //    /api/notes   -> reads/writes notes.txt beside this file
 //    /api/discord -> Discord RPC: real mute/deafen, voice channel, speaking
+//    /api/phone   -> iPhone notifications, calls and battery over BLE (ANCS)
 //    everything else -> static files from this folder
 //
 //  Run with:   node server.js
@@ -314,7 +315,7 @@ function pcStart() {
 
 // Windows does not reap a child when its parent exits, so tidy up on the way
 // out. pcstats.ps1 also watches our pid, which covers a hard kill.
-for (const sig of ["exit", "SIGINT", "SIGTERM"]) process.on(sig, () => { pcStop(); sysStop(); discord.stop(); });
+for (const sig of ["exit", "SIGINT", "SIGTERM"]) process.on(sig, () => { pcStop(); sysStop(); phoneStop(); discord.stop(); });
 
 function pcStop() {
   if (!pc.proc) return;
@@ -732,6 +733,187 @@ function handleDiscord(req, res) {
   });
 }
 
+// ============================================================================
+//  iPhone  —  GET /api/phone , POST /api/phone
+//
+//  ancs/bin/out/y70-ancs.exe holds the Bluetooth LE connection and streams JSON
+//  lines. It is a compiled C# helper rather than PowerShell like the others,
+//  because Windows PowerShell cannot subscribe to WinRT events at all and ANCS
+//  is entirely event-driven.
+// ============================================================================
+const ANCS_EXE = path.join(ROOT, "ancs", "bin", "out", "y70-ancs.exe");
+const PHONE_IDLE_MS = 5 * 60 * 1000;      // it is ambient; keep it up a while
+const PHONE_MAX_NOTIFS = 60;
+
+const phone = {
+  proc: null, buf: "", lastAsk: 0, err: null,
+  device: null, connected: false, battery: null, batteryAt: 0,
+  notifications: [],                       // newest first
+  call: null,                              // the live incoming/active call
+  seq: 0,
+};
+
+function phoneStart() {
+  if (phone.proc) return;
+  if (process.platform !== "win32") { phone.err = "Windows only."; return; }
+  if (!fs.existsSync(ANCS_EXE)) {
+    phone.err = "The iPhone bridge is not built yet (ancs/bin/out/y70-ancs.exe).";
+    return;
+  }
+  phone.err = null;
+  const child = spawn(ANCS_EXE, ["--parent=" + process.pid], { cwd: ROOT, windowsHide: true });
+  phone.proc = child;
+
+  child.stdout.on("data", (d) => {
+    phone.buf += d.toString();
+    let i;
+    while ((i = phone.buf.indexOf("\n")) >= 0) {
+      const line = phone.buf.slice(0, i).trim();
+      phone.buf = phone.buf.slice(i + 1);
+      if (!line) continue;
+      try { onPhoneMessage(JSON.parse(line)); } catch (e) { /* partial or noise */ }
+    }
+    if (phone.buf.length > 1e6) phone.buf = "";
+  });
+  child.stderr.on("data", (d) => { phone.err = String(d).slice(0, 300).trim() || phone.err; });
+  child.on("error", (e) => { phone.err = e.message; phone.proc = null; });
+  child.on("exit", () => {
+    phone.proc = null; phone.buf = ""; phone.connected = false;
+    // The phone wanders in and out of range all day; keep trying while anyone
+    // is watching, but not so fast that it thrashes.
+    if (Date.now() - phone.lastAsk < PHONE_IDLE_MS) setTimeout(phoneStart, 8000);
+  });
+}
+
+function phoneStop() {
+  if (!phone.proc) return;
+  phone.proc.kill();
+  phone.proc = null;
+  phone.buf = "";
+  phone.connected = false;
+}
+setInterval(() => {
+  if (phone.proc && Date.now() - phone.lastAsk > PHONE_IDLE_MS) phoneStop();
+}, 30000).unref();
+
+function onPhoneMessage(m) {
+  switch (m.type) {
+    case "ready":
+      phone.device = m.device;
+      phone.connected = m.connection === "Connected";
+      phone.err = null;
+      break;
+    case "subscribed": phone.connected = true; break;
+    case "disconnected": phone.connected = false; break;
+    case "battery":
+      phone.battery = m.level;
+      phone.batteryAt = Date.now();
+      break;
+    case "error": phone.err = m.error; break;
+    case "notif": onPhoneNotification(m); break;
+    default: break;
+  }
+}
+
+function onPhoneNotification(m) {
+  if (m.event === "removed") {
+    phone.notifications = phone.notifications.filter((n) => n.uid !== m.uid);
+    // A call notification disappearing is how iOS says the call is over —
+    // whether it was answered elsewhere, declined, or simply stopped ringing.
+    if (phone.call && phone.call.uid === m.uid && !phone.call.accepted) phone.call = null;
+    else if (phone.call && phone.call.uid === m.uid) phone.call.ended = true;
+    return;
+  }
+
+  const n = {
+    uid: m.uid,
+    at: Date.now(),
+    seq: ++phone.seq,
+    category: m.category,
+    categoryId: m.categoryId,
+    app: m.app || "",
+    appName: m.appName || "",
+    title: m.title || "",
+    subtitle: m.subtitle || "",
+    message: m.message || "",
+    silent: !!m.silent,
+    important: !!m.important,
+    preExisting: !!m.preExisting,
+    canAccept: !!m.positive,
+    canDecline: !!m.negative,
+  };
+
+  const existing = phone.notifications.findIndex((x) => x.uid === n.uid);
+  if (existing >= 0) phone.notifications[existing] = { ...phone.notifications[existing], ...n };
+  else phone.notifications.unshift(n);
+  if (phone.notifications.length > PHONE_MAX_NOTIFS) phone.notifications.length = PHONE_MAX_NOTIFS;
+
+  if (n.category === "IncomingCall") {
+    phone.call = {
+      uid: n.uid, from: n.title || n.message || "Unknown",
+      detail: n.subtitle || n.message || "",
+      startedAt: Date.now(), accepted: false, ended: false,
+      canAccept: n.canAccept, canDecline: n.canDecline,
+    };
+  }
+}
+
+function phoneSend(obj) {
+  if (!phone.proc) return false;
+  try { phone.proc.stdin.write(JSON.stringify(obj) + "\n"); return true; }
+  catch (e) { return false; }
+}
+
+function handlePhoneGet(req, res) {
+  phone.lastAsk = Date.now();
+  phoneStart();
+  return json(res, 200, {
+    ok: true,
+    running: !!phone.proc,
+    connected: phone.connected,
+    device: phone.device,
+    battery: phone.battery,
+    batteryAge: phone.battery == null ? null : Date.now() - phone.batteryAt,
+    notifications: phone.notifications,
+    call: phone.call,
+    error: phone.err,
+  });
+}
+
+function handlePhonePost(req, res) {
+  phone.lastAsk = Date.now();
+  readJsonBody(req, res, (body) => {
+    const action = String(body.action || "");
+    const uid = Number(body.uid);
+
+    if (action === "accept" || action === "decline") {
+      if (!phoneSend({ cmd: "action", uid, action: action === "accept" ? "positive" : "negative" })) {
+        return json(res, 503, { ok: false, error: "the bridge is not running" });
+      }
+      if (phone.call && phone.call.uid === uid) {
+        if (action === "accept") { phone.call.accepted = true; phone.call.answeredAt = Date.now(); }
+        else phone.call = null;
+      }
+      return json(res, 200, { ok: true, call: phone.call });
+    }
+    // Hanging up: iOS removes the incoming-call notification the moment it is
+    // answered, so the uid may no longer exist. Ask anyway, then let go of it
+    // locally either way so the panel does not keep showing a dead call.
+    if (action === "hangup") {
+      phoneSend({ cmd: "action", uid, action: "negative" });
+      phone.call = null;
+      return json(res, 200, { ok: true, note: "asked to end; iOS may have already dropped the notification" });
+    }
+    if (action === "dismiss") {
+      phone.notifications = phone.notifications.filter((n) => n.uid !== uid);
+      return json(res, 200, { ok: true });
+    }
+    if (action === "clear") { phone.notifications = []; return json(res, 200, { ok: true }); }
+    if (action === "restart") { phoneStop(); phoneStart(); return json(res, 200, { ok: true }); }
+    return json(res, 400, { ok: false, error: "unknown action" });
+  });
+}
+
 // ---- Server ----------------------------------------------------------------
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split("?")[0]);
@@ -739,6 +921,8 @@ const server = http.createServer((req, res) => {
   if (req.method === "POST" && urlPath === "/api/claude") return handleClaude(req, res);
   if (req.method === "GET" && urlPath === "/api/claude-stats") return handleClaudeStats(req, res);
   if (req.method === "GET" && urlPath === "/api/pcstats") return handlePcStats(req, res);
+  if (urlPath === "/api/phone" && req.method === "GET") return handlePhoneGet(req, res);
+  if (urlPath === "/api/phone" && req.method === "POST") return handlePhonePost(req, res);
   if (urlPath === "/api/discord" && (req.method === "GET" || req.method === "POST")) return handleDiscord(req, res);
   if (urlPath === "/api/notes" && (req.method === "GET" || req.method === "POST")) return handleNotes(req, res);
   if (req.method === "GET" && urlPath === "/api/system") return handleSystemGet(req, res);

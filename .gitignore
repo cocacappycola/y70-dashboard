@@ -17,3 +17,7 @@ desktop.ini
 
 # Local Claude Code settings, not project config.
 .claude/settings.local.json
+
+# ANCS bridge build output (rebuilt with: cd ancs && dotnet publish -c Release -o bin/out)
+ancs/bin/
+ancs/obj/

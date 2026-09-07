@@ -64,6 +64,53 @@ hidden whenever the drawer opens or another app is in front.
 > auto-scroll really does move to a different video; on TikTok the URL doesn't
 > change between clips, so give that one an eyeball.
 
+### iPhone (notifications, calls, battery)
+
+Your iPhone's notifications appear on the panel, an incoming call drops down a
+card you can answer or decline from the touchscreen, and the phone's battery
+shows in the drawer.
+
+This is **ANCS** — Apple's Notification Center Service, the sanctioned route for
+getting iPhone notifications onto a non-Apple device. The phone acts as the
+Bluetooth LE GATT server and the dashboard is the client.
+
+- **Banners** slide down from the top bar, iOS style, and clear themselves after
+  a few seconds — or on a tap.
+- **The notification list** sits at the top of the drawer, under Phone. Tap one
+  to clear it from the panel (your phone keeps its own copy).
+- **Calls** drop a card over everything with **Decline** / **Accept**. Answer and
+  it becomes a single **End call** with a running timer; it slides away when the
+  call ends. Accept and decline are real ANCS actions, so they act on the phone.
+- **Battery** is read from the standard Battery Service and updates itself.
+
+#### Setting it up
+
+Pair the iPhone to Windows in **Settings → Bluetooth & devices** as normal. iOS
+then exposes ANCS over the LE link on its own; there is nothing to install on the
+phone and no app to approve. If iOS asks whether to share notifications, say yes.
+
+The bridge is a small compiled helper, `ancs/y70-ancs.exe`, built by:
+
+```bash
+cd ancs
+dotnet publish -c Release -o bin/out
+```
+
+It ships inside the installer, so this is only needed when working from source.
+It needs the **.NET 8 runtime**, which is already present on most machines.
+
+> **Why this one is C# when every other helper is PowerShell:** Windows
+> PowerShell 5.1 cannot subscribe to WinRT events at all ("Windows PowerShell
+> cannot subscribe to Windows RT events") and cannot project `IBuffer`. ANCS is
+> entirely event-driven over GATT notifications, so PowerShell simply cannot
+> host it. Verified both limits before switching languages.
+
+> **One honest limit.** iOS removes the incoming-call notification the moment the
+> call is answered, so the identifier the hang-up action needs is often already
+> gone. **End call** asks anyway and always clears the card locally, but whether
+> the phone actually hangs up is not guaranteed. Answering and declining are
+> reliable; ending a call may need the phone.
+
 ### Auto-update
 
 The app checks its own GitHub Releases 20 seconds after launch and every six
@@ -704,6 +751,7 @@ wscript "autostart-hidden.vbs" 0
 | `weather-bg.js` | Reactive sky canvas, shared by the weather app and widget |
 | `syscontrol.ps1` | Resident helper: Core Audio + Windows media session |
 | `discord.js` | Discord RPC over the local named pipe |
+| `ancs/Program.cs` | iPhone bridge — ANCS notifications, calls and battery over BLE |
 | `discord-app.json` | Your Discord client id + secret (never served) |
 | `v2/main.js` | V2 native shell — the non-activating window |
 | `v2/preload.js` | Bridge exposing keyboard mode to the pages |

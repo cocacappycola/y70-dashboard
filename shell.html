@@ -16,11 +16,40 @@
       <div id="kb-banner">keyboard mode — this window has focus</div>
     </div>
 
+    <!-- Incoming call. Drops from the top over everything, and leaves the same
+         way when the call ends. -->
+    <div id="call-card">
+      <div class="call-top">
+        <span class="call-ico">☎</span>
+        <div class="call-who">
+          <div id="call-from">Unknown</div>
+          <div id="call-detail">incoming call</div>
+        </div>
+        <div id="call-timer"></div>
+      </div>
+      <div class="call-btns">
+        <button id="call-decline" class="call-btn decline">Decline</button>
+        <button id="call-accept" class="call-btn accept">Accept</button>
+        <button id="call-hangup" class="call-btn decline wide">End call</button>
+      </div>
+    </div>
+
+    <!-- Notification banners, iPhone style. -->
+    <div id="banners"></div>
+
     <!-- Drawer (pulls down over the app) -->
     <div id="drawer-backdrop" class="hidden"></div>
     <div id="drawer">
       <!-- ---- Main drawer view ---- -->
       <div class="drawer-inner">
+        <div class="sec-title" id="phone-title">
+          Phone
+          <span class="sec-hint" id="phone-status">connecting…</span>
+          <span class="spacer"></span>
+          <span id="phone-batt"></span>
+        </div>
+        <div id="phone-list"></div>
+
         <div class="sec-title">Scenes</div>
         <div class="tile-row" id="scene-row"></div>
         <div class="scene-actions">

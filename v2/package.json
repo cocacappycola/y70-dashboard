@@ -1,6 +1,6 @@
 {
   "name": "y70-dashboard",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "private": true,
   "description": "Native shell for the HYTE Y70 Touch dashboard \u2014 a window that never steals focus.",
   "author": "Cappy",
@@ -55,6 +55,13 @@
           "pcstats.ps1",
           "syscontrol.ps1",
           "discord-app.example.json"
+        ]
+      },
+      {
+        "from": "../ancs/bin/out",
+        "to": "dashboard/ancs/bin/out",
+        "filter": [
+          "**/*"
         ]
       }
     ],

@@ -436,6 +436,173 @@ function wireScenes() {
   renderScenes();
 }
 
+// ---- iPhone: banners, call card, notification list ---------------------------
+// Fed by /api/phone, which is backed by a Bluetooth LE bridge speaking Apple's
+// ANCS. Notifications arrive as they do on the phone; an incoming call is just
+// a notification in the IncomingCall category that can be acted on.
+let phoneSeen = 0;            // highest notification seq already shown as a banner
+let phoneCall = null;
+let callTimer = null;
+let phoneFirstLoad = true;
+
+async function phonePoll() {
+  let d;
+  try { d = await (await fetch("/api/phone")).json(); }
+  catch (e) { setPhoneStatus("server unreachable"); return; }
+  if (!d.ok) return;
+
+  setPhoneStatus(
+    d.connected ? (d.device || "connected")
+      : d.error ? d.error
+      : d.running ? "looking for the phone\u2026" : "off");
+
+  const batt = $("#phone-batt");
+  if (batt) {
+    batt.textContent = d.battery == null ? "" : d.battery + "%";
+    batt.classList.toggle("low", d.battery != null && d.battery <= 20);
+  }
+
+  renderPhoneList(d.notifications || []);
+  renderCall(d.call);
+
+  // Banner anything new. On the very first poll everything is "new", and
+  // nobody wants a wall of banners for notifications that arrived yesterday.
+  const fresh = (d.notifications || []).filter((n) => n.seq > phoneSeen && !n.preExisting);
+  for (const n of (d.notifications || [])) phoneSeen = Math.max(phoneSeen, n.seq);
+  if (!phoneFirstLoad) {
+    // Oldest first, so the newest ends up nearest the top.
+    for (const n of fresh.slice().reverse()) {
+      if (n.category === "IncomingCall") continue;   // the call card covers this
+      showBanner(n);
+    }
+  }
+  phoneFirstLoad = false;
+}
+
+function setPhoneStatus(text) {
+  const el = $("#phone-status");
+  if (el) el.textContent = text;
+}
+
+const APP_GLYPHS = {
+  MobileSMS: "\u{1F4AC}", Messages: "\u{1F4AC}", mobilephone: "\u260e", Phone: "\u260e",
+  mobilemail: "\u2709", Mail: "\u2709", MobileCal: "\u{1F4C5}", Calendar: "\u{1F4C5}",
+};
+const glyphFor = (n) =>
+  n.category === "IncomingCall" || n.category === "MissedCall" ? "\u260e"
+    : APP_GLYPHS[n.appName] || APP_GLYPHS[(n.app || "").split(".").pop()] || "\u{1F514}";
+
+function showBanner(n) {
+  const stack = $("#banners");
+  if (!stack) return;
+  const el = document.createElement("div");
+  el.className = "banner";
+  el.innerHTML =
+    '<span class="b-ico"></span><div class="b-body">' +
+    '<div class="b-app"></div><div class="b-title"></div><div class="b-msg"></div></div>';
+  el.querySelector(".b-ico").textContent = glyphFor(n);
+  el.querySelector(".b-app").textContent = n.appName || n.app || "Notification";
+  el.querySelector(".b-title").textContent = n.title || n.appName || "";
+  el.querySelector(".b-msg").textContent = n.message || n.subtitle || "";
+  stack.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("in"));
+
+  const drop = () => {
+    el.classList.remove("in");
+    setTimeout(() => el.remove(), 400);
+  };
+  el.addEventListener("pointerup", drop);
+  setTimeout(drop, n.important ? 9000 : 6000);
+  // Never let a burst of notifications fill the screen.
+  while (stack.children.length > 4) stack.firstElementChild.remove();
+}
+
+function renderCall(call) {
+  const card = $("#call-card");
+  if (!card) return;
+  phoneCall = call || null;
+
+  if (!call || call.ended) {
+    card.classList.remove("in", "active");
+    clearInterval(callTimer);
+    callTimer = null;
+    return;
+  }
+  $("#call-from").textContent = call.from || "Unknown";
+  $("#call-detail").textContent = call.accepted ? "on the call" : (call.detail || "incoming call");
+  card.classList.toggle("active", !!call.accepted);
+  card.classList.add("in");
+
+  clearInterval(callTimer);
+  if (call.accepted) {
+    const started = call.answeredAt || Date.now();
+    const tick = () => {
+      const s = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      $("#call-timer").textContent =
+        Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    };
+    tick();
+    callTimer = setInterval(tick, 500);
+  }
+}
+
+async function phoneAction(action, uid) {
+  try {
+    await fetch("/api/phone", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, uid }),
+    });
+  } catch (e) { /* the next poll re-syncs */ }
+  phonePoll();
+}
+
+function renderPhoneList(list) {
+  const box = $("#phone-list");
+  if (!box) return;
+  if (!list.length) {
+    box.innerHTML = '<div id="phone-empty">Nothing from your phone right now.</div>';
+    return;
+  }
+  const sig = list.map((n) => n.uid + ":" + n.seq).join("|");
+  if (box.dataset.sig === sig) { paintPhoneTimes(box, list); return; }
+  box.dataset.sig = sig;
+  box.innerHTML = "";
+  for (const n of list) {
+    const el = document.createElement("div");
+    el.className = "pn" + (n.category === "IncomingCall" || n.category === "MissedCall" ? " call" : "");
+    el.dataset.uid = n.uid;
+    el.innerHTML =
+      '<span class="p-ico"></span><div class="p-body">' +
+      '<div class="p-app"></div><div class="p-title"></div><div class="p-msg"></div>' +
+      '</div><span class="p-time"></span>';
+    el.querySelector(".p-ico").textContent = glyphFor(n);
+    el.querySelector(".p-app").textContent = n.appName || n.app || "";
+    el.querySelector(".p-title").textContent = n.title || "";
+    el.querySelector(".p-msg").textContent = n.message || n.subtitle || "";
+    // Tapping clears it from the panel only; the phone keeps its own copy.
+    el.addEventListener("pointerup", () => phoneAction("dismiss", n.uid));
+    box.appendChild(el);
+  }
+  paintPhoneTimes(box, list);
+}
+
+function paintPhoneTimes(box, list) {
+  for (const n of list) {
+    const el = box.querySelector('.pn[data-uid="' + n.uid + '"] .p-time');
+    if (!el) continue;
+    const mins = Math.floor((Date.now() - n.at) / 60000);
+    el.textContent = mins < 1 ? "now" : mins < 60 ? mins + "m" : Math.floor(mins / 60) + "h";
+  }
+}
+
+function wirePhone() {
+  $("#call-accept").addEventListener("pointerup", () => phoneCall && phoneAction("accept", phoneCall.uid));
+  $("#call-decline").addEventListener("pointerup", () => phoneCall && phoneAction("decline", phoneCall.uid));
+  $("#call-hangup").addEventListener("pointerup", () => phoneCall && phoneAction("hangup", phoneCall.uid));
+  phonePoll();
+  setInterval(phonePoll, 2000);
+}
+
 // ---- Settings: theme / appearance ------------------------------------------
 // theme.js owns the colour maths and persistence; this is just the UI. Every
 // frame reads the saved theme itself on load, so new iframes come up correct;
@@ -723,6 +890,7 @@ wireDrawer();
 wireSettings();
 wireScenes();
 wireNative();
+wirePhone();
 setApp(state.app);
 renderDock();
 window.addEventListener("resize", () => renderDock());
