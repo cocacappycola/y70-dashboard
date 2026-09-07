@@ -547,7 +547,8 @@ let keyboardMode = false;
 function wireNative() {
   document.body.classList.toggle("is-native", !!native);
   if (!native) return;
-  native.getKeyboardMode().then(setKeyboardIndicator);
+  // Tolerate a shell that has not registered its handlers yet.
+  native.getKeyboardMode().then(setKeyboardIndicator).catch(() => {});
   native.onKeyboardMode(setKeyboardIndicator);
   $("#kb-toggle").addEventListener("pointerup", () => native.setKeyboardMode(!keyboardMode));
   $("#native-reload").addEventListener("pointerup", () => native.reload());
