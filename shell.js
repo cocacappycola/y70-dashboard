@@ -537,6 +537,37 @@ function wireSettings() {
     applyTheme(retag({ ...theme, tintBg: e.target.checked })));
 }
 
+// ---- Native shell (V2) -----------------------------------------------------
+// window.y70native only exists when the dashboard is running inside the V2
+// Electron shell. In a plain browser every one of these is a no-op and the
+// native-only controls stay hidden, so one set of pages serves both.
+const native = window.y70native || null;
+let keyboardMode = false;
+
+function wireNative() {
+  document.body.classList.toggle("is-native", !!native);
+  if (!native) return;
+  native.getKeyboardMode().then(setKeyboardIndicator);
+  native.onKeyboardMode(setKeyboardIndicator);
+  $("#kb-toggle").addEventListener("pointerup", () => native.setKeyboardMode(!keyboardMode));
+  $("#native-reload").addEventListener("pointerup", () => native.reload());
+  $("#native-quit").addEventListener("pointerup", () => native.quit());
+}
+
+function setKeyboardIndicator(on) {
+  keyboardMode = !!on;
+  document.body.classList.toggle("keyboard-mode", keyboardMode);
+  const t = $("#kb-toggle");
+  if (t) t.textContent = keyboardMode ? "Keyboard mode: ON" : "Keyboard mode: off";
+}
+
+// A widget that needs typing (Notes) asks through the shell, since preload is
+// only injected into this top-level frame.
+function relayKeyboardRequest(on) {
+  if (!native) return;
+  native.setKeyboardMode(!!on);
+}
+
 // ---- Mini player -----------------------------------------------------------
 // A slim now-playing strip that appears automatically whenever you leave the
 // Spotify app while something is loaded, and disappears when you go back.
@@ -570,6 +601,9 @@ window.addEventListener("message", (e) => {
   const d = e.data;
   if (!d || typeof d.type !== "string" || !d.type.startsWith("y70:")) return;
 
+  // A widget asking to borrow the keyboard (see the Notes widget).
+  if (d.type === "y70:keyboard") { relayKeyboardRequest(d.on); return; }
+
   if (d.type === "y70:cmd") {
     const sp = document.getElementById("app-spotify");
     if (sp) { try { sp.contentWindow.postMessage(d, "*"); } catch (err) {} }
@@ -592,6 +626,7 @@ window.addEventListener("message", (e) => {
 wireDrawer();
 wireSettings();
 wireScenes();
+wireNative();
 setApp(state.app);
 renderDock();
 window.addEventListener("resize", () => renderDock());

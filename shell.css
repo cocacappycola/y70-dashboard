@@ -128,6 +128,22 @@ html, body {
 .wrow:not(.on) .wcheck::before { content: "\25cb"; opacity: .5; }
 .wrow:not(.on) .tile-ico { filter: grayscale(1); opacity: .5; }
 
+/* ---------- Native shell (V2) ---------- */
+/* Hidden unless running inside the Electron shell. */
+.native-only { display: none !important; }
+body.is-native .native-only { display: flex !important; }
+
+/* Keyboard mode is the one state where the panel DOES hold focus, so it is
+   spelled out rather than left to a subtle icon. */
+#kb-banner {
+  display: none; position: absolute; inset: 0; z-index: 2;
+  align-items: center; justify-content: center;
+  background: var(--trim); color: var(--trim-ink);
+  font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+}
+body.keyboard-mode #kb-banner { display: flex; }
+body.keyboard-mode #topbar .grip { opacity: 0; }
+
 .app-tile.active { border-color: var(--trim); background: var(--panel-2); }
 .wid-tile.on { border-color: var(--trim); }
 .wid-tile.on::after { content: "✓"; color: var(--trim); font-size: 13px; margin-left: 2px; }

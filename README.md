@@ -1,5 +1,81 @@
 # HYTE Y70 · Dashboard
 
+> **V2 — the native app.** Tapping the panel no longer takes focus off whatever
+> you are doing. Run **[`launch-v2.bat`](launch-v2.bat)**; quit from the tray icon.
+> V1 (the browser build) is still here and still works — it is tagged `v1` in git.
+
+## V2: a window that doesn't steal focus
+
+In V1 the dashboard was a Brave window. Every tap **activated** that window:
+Windows moved the foreground to it, the game lost focus, and with it lost mouse
+capture — which is why the cursor appeared to jump across. No Chromium flag can
+prevent this, because the browser owns the window and always activates on click.
+
+V2 owns its own window and creates it with **`focusable: false`**, which on
+Windows is the `WS_EX_NOACTIVATE` extended style — *"a top-level window created
+with this style does not become the foreground window when the user clicks it."*
+Taps still arrive as ordinary pointer events. They simply never take focus.
+
+Measured on this machine, launching V2 while another window was in front:
+
+```
+foreground before : 'Claude'
+foreground after  : 'Claude'      <- focus kept
+window rect       : 3840,0  682x2560   <- exactly the panel, no overlap
+WS_EX_NOACTIVATE  : True
+WS_EX_TOPMOST     : True
+```
+
+It also:
+
+- **starts the server itself** and waits for the port properly — no launcher
+  chain, no browser, no PowerShell window placement,
+- sits **always-on-top at `screen-saver` level**, so it stays visible over a
+  borderless-fullscreen game,
+- **skips the taskbar** and has no frame, so it is a panel rather than a window,
+- re-places itself when displays come and go (the Y70 sleeps with the PC),
+- reloads itself if the renderer ever dies.
+
+### The keyboard trade-off
+
+A window that never takes focus also never receives keystrokes. That is the
+deal, and it is the right default for a screen you tap while playing something.
+
+When you do need to type — the Notes widget, the calculator — the panel borrows
+the keyboard and gives it straight back:
+
+- **Tapping into Notes turns keyboard mode on automatically**, and tapping away
+  turns it off. You never think about it.
+- A **band across the top bar** says *keyboard mode — this window has focus*, so
+  the one state where the panel does hold focus is never a surprise.
+- The drawer's **Panel** row and a click on the **tray icon** toggle it manually.
+
+Verified against Windows itself:
+
+```
+passive (focusable:false) : noactivate=True   foreground=Claude
+keyboard mode ON          : noactivate=False  foreground=<panel>
+back to passive           : noactivate=True
+```
+
+### Setup
+
+```bash
+cd v2 && npm install
+```
+
+Then run [`launch-v2.bat`](launch-v2.bat). ~350 MB of Electron lives in
+`v2/node_modules` and is git-ignored.
+
+[`install-autostart.bat`](install-autostart.bat) now prefers V2 automatically
+whenever `v2/node_modules` exists; force either build with `/v1` or `/v2`.
+
+**Known limit:** a game running in *exclusive* fullscreen owns the whole GPU
+output and will cover even a topmost window. Borderless windowed is fine — which
+is what you want anyway for a second screen.
+
+---
+
 The app is now a **dashboard shell** (`shell.html`) served at `http://127.0.0.1:8888`:
 
 - **Apps** run in the main frame — Spotify (default) and Weather. Switch apps from
@@ -506,4 +582,7 @@ wscript "autostart-hidden.vbs" 0
 | `syscontrol.ps1` | Resident helper: Core Audio + Windows media session |
 | `discord.js` | Discord RPC over the local named pipe |
 | `discord-app.json` | Your Discord client id + secret (never served) |
+| `v2/main.js` | V2 native shell — the non-activating window |
+| `v2/preload.js` | Bridge exposing keyboard mode to the pages |
+| `launch-v2.bat` | Starts V2 |
 | `notes.txt` | The notes widget's store (never served over HTTP) |

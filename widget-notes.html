@@ -107,7 +107,15 @@
       clearTimeout(saveTimer);
       saveTimer = setTimeout(save, 800);
     });
-    pad.addEventListener("blur", () => { clearTimeout(saveTimer); save(); });
+    // In the V2 shell the window is deliberately non-focusable, so keystrokes
+    // don't reach it. Tapping into the pad borrows the keyboard for as long as
+    // you are typing, and gives it straight back — the panel is passive again
+    // the moment you tap away.
+    function askKeyboard(on) {
+      try { window.parent.postMessage({ type: "y70:keyboard", on }, "*"); } catch (e) {}
+    }
+    pad.addEventListener("focus", () => askKeyboard(true));
+    pad.addEventListener("blur", () => { askKeyboard(false); clearTimeout(saveTimer); save(); });
     window.addEventListener("pagehide", () => {
       if (pad.value === saved) return;
       // Fire-and-forget on teardown; fetch would be cancelled.

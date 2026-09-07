@@ -13,6 +13,7 @@
     <!-- Pull-down bar -->
     <div id="topbar">
       <div class="grip"></div>
+      <div id="kb-banner">keyboard mode — this window has focus</div>
     </div>
 
     <!-- Drawer (pulls down over the app) -->
@@ -40,6 +41,13 @@
         </div>
         <div class="sec-title">Pull-up widgets<span class="sec-hint">drag ☰ to reorder · tap to toggle</span></div>
         <div id="widget-list"></div>
+
+        <div class="sec-title native-only">Panel</div>
+        <div class="tile-row native-only">
+          <button class="set-reset" id="kb-toggle">Keyboard mode: off</button>
+          <button class="set-reset" id="native-reload">Reload</button>
+          <button class="set-reset" id="native-quit">Quit</button>
+        </div>
 
         <div class="sec-title">Settings</div>
         <div class="tile-row">
