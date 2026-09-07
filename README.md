@@ -107,7 +107,15 @@ the keyboard and gives it straight back:
   turns it off. You never think about it.
 - A **band across the top bar** says *keyboard mode — this window has focus*, so
   the one state where the panel does hold focus is never a surprise.
-- The drawer's **Panel** row and a click on the **tray icon** toggle it manually.
+- The drawer's **Panel** row and the **tray menu** toggle it manually. It also
+  **releases itself after 60 seconds** of no typing, so it can never get stuck on.
+- **Never take focus** is a hard lock, in the same two places: while it is on
+  nothing can make the panel focusable, whatever asks. Use it while gaming.
+
+> A left-click on the tray icon used to toggle keyboard mode. Clicking a new
+> app's tray icon is the obvious thing to do, so the panel would quietly become
+> focusable and steal focus on every tap from then on — with only a banner to
+> explain it. The tray click now just opens the menu.
 
 Verified against Windows itself:
 

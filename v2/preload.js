@@ -46,6 +46,12 @@ contextBridge.exposeInMainWorld("y70native", {
   webAction: (site, action, arg) => ipcRenderer.invoke("y70:web-action", site, action, arg),
   webState: (site) => ipcRenderer.invoke("y70:web-state", site),
 
+  // Refuses keyboard mode entirely while on.
+  getPassiveLock: () => ipcRenderer.invoke("y70:passive-lock"),
+  setPassiveLock: (on) => ipcRenderer.invoke("y70:passive-lock", !!on),
+  keyboardTouch: () => ipcRenderer.invoke("y70:keyboard-touch"),
+  focusReport: () => ipcRenderer.invoke("y70:focus-report"),
+
   reload: () => ipcRenderer.invoke("y70:reload"),
   quit: () => ipcRenderer.invoke("y70:quit"),
   displays: () => ipcRenderer.invoke("y70:displays"),

@@ -557,6 +557,18 @@ function wireNative() {
   native.onKeyboardMode(setKeyboardIndicator);
   $("#kb-toggle").addEventListener("pointerup", () => native.setKeyboardMode(!keyboardMode));
 
+  // Hard lock: while this is on nothing can make the panel focusable, so a
+  // stray tap in a text field cannot cost you focus mid-game.
+  const lock = $("#passive-lock");
+  const paintLock = (on) => {
+    lock.textContent = "Never take focus: " + (on ? "ON" : "off");
+    lock.classList.toggle("on", !!on);
+  };
+  native.getPassiveLock().then(paintLock).catch(() => {});
+  lock.addEventListener("pointerup", async () => {
+    paintLock(await native.setPassiveLock(!lock.classList.contains("on")));
+  });
+
   // Start with Windows / taskbar presence, read back from the OS rather than
   // remembered here, so the buttons always show the truth.
   const paint = (el, on, label) => { el.textContent = label + (on ? ": on" : ": off"); el.classList.toggle("on", !!on); };

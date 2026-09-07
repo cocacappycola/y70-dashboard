@@ -52,6 +52,12 @@ let tray = null;
 let serverProc = null;
 let keyboardMode = false;
 let showInTaskbar = false;
+// While this is on the panel refuses to become focusable at all — for when you
+// are in a game and want no possibility of losing focus.
+let passiveLock = false;
+let kbTimer = null;
+let unwantedFocusCount = 0;
+const KB_TIMEOUT_MS = 60000;
 
 // Off by default on purpose: a taskbar button is a thing you click, and
 // clicking it would activate the window — the one behaviour V2 exists to avoid.
@@ -96,12 +102,16 @@ async function ensureServer() {
 // ---------------------------------------------------------------- window ---
 function pickDisplay() {
   const all = screen.getAllDisplays();
+  // Seen empty in practice, which threw on `d.bounds` and left the app with no
+  // window at all. Always hand back something with bounds.
+  if (!all || !all.length) return screen.getPrimaryDisplay();
   if (/^\d+$/.test(TARGET_DISPLAY)) {
     const i = Number(TARGET_DISPLAY);
     if (all[i]) return all[i];
   }
-  return all.slice().sort((a, b) =>
+  const smallest = all.slice().sort((a, b) =>
     (a.bounds.width * a.bounds.height) - (b.bounds.width * b.bounds.height))[0];
+  return smallest || screen.getPrimaryDisplay();
 }
 
 function createWindow() {
@@ -171,6 +181,18 @@ function createWindow() {
     e.preventDefault();
     if (/^https:\/\/(accounts\.spotify\.com|discord\.com)\//.test(url)) openAuth(url);
   });
+  // Last line of defence. WS_EX_NOACTIVATE stops *mouse* activation, but a
+  // touchscreen goes through the pointer path, and Chromium itself can call
+  // focus() on the window from inside. If the panel is ever focused while
+  // keyboard mode is off, hand focus straight back.
+  win.on("focus", () => {
+    if (keyboardMode) return;
+    unwantedFocusCount++;
+    setImmediate(() => {
+      if (!keyboardMode && win && !win.isDestroyed() && win.isFocused()) win.blur();
+    });
+  });
+
   // If the renderer ever dies, come back rather than leaving a black panel.
   win.webContents.on("render-process-gone", () => {
     setTimeout(() => win && !win.isDestroyed() && win.reload(), 1500);
@@ -231,13 +253,36 @@ function finishAuth() {
 // the page can ask for it explicitly and give it back.
 function setKeyboardMode(on) {
   if (!win || win.isDestroyed()) return keyboardMode;
+  // Passive lock wins over everything: while it is on, nothing can make the
+  // panel focusable, however it asks.
+  if (on && passiveLock) return keyboardMode;
+
   keyboardMode = !!on;
   win.setFocusable(keyboardMode);
   if (keyboardMode) win.focus();
   else win.blur();
   win.webContents.send("y70:keyboard-mode", keyboardMode);
   updateTray();
+
+  // Auto-release, so a field that grabbed the keyboard and never gave it back
+  // cannot leave the panel focusable forever.
+  clearTimeout(kbTimer);
+  if (keyboardMode) kbTimer = setTimeout(() => setKeyboardMode(false), KB_TIMEOUT_MS);
   return keyboardMode;
+}
+
+// Any keystroke while typing pushes the auto-release back.
+function touchKeyboardMode() {
+  if (!keyboardMode) return;
+  clearTimeout(kbTimer);
+  kbTimer = setTimeout(() => setKeyboardMode(false), KB_TIMEOUT_MS);
+}
+
+function setPassiveLock(on) {
+  passiveLock = !!on;
+  if (passiveLock && keyboardMode) setKeyboardMode(false);
+  updateTray();
+  return passiveLock;
 }
 
 // ---------------------------------------------------------------- web apps --
@@ -434,10 +479,15 @@ function setAutoStart(on) {
 
 function updateTray() {
   if (!tray) return;
-  tray.setToolTip("Y70 Dashboard" + (keyboardMode ? " — keyboard mode" : " — passive (no focus steal)"));
+  tray.setToolTip("Y70 Dashboard" +
+    (keyboardMode ? " — keyboard mode (has focus)"
+                  : passiveLock ? " — passive, locked" : " — passive (never takes focus)"));
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: keyboardMode ? "Keyboard mode: ON" : "Keyboard mode: off",
-      type: "checkbox", checked: keyboardMode, click: () => setKeyboardMode(!keyboardMode) },
+    { label: keyboardMode ? "Keyboard mode: ON (panel has focus)" : "Keyboard mode: off",
+      type: "checkbox", checked: keyboardMode, enabled: !passiveLock,
+      click: () => setKeyboardMode(!keyboardMode) },
+    { label: "Never take focus (lock)", type: "checkbox", checked: passiveLock,
+      click: () => setPassiveLock(!passiveLock) },
     { type: "separator" },
     { label: "Start with Windows", type: "checkbox", checked: getAutoStart(),
       click: () => setAutoStart(!getAutoStart()) },
@@ -465,8 +515,11 @@ function createTray() {
   const img = nativeImage.createFromPath(TRAY_PATH);
   tray = new Tray(img.isEmpty() ? nativeImage.createFromPath(ICON_PATH) : img);
   updateTray();
-  // A plain click toggles keyboard mode: the one thing you reach for often.
-  tray.on("click", () => setKeyboardMode(!keyboardMode));
+  // Show the menu. This used to toggle keyboard mode, which meant one click on
+  // the tray icon quietly made the panel focusable — and from then on every tap
+  // stole focus, with nothing but a banner to explain why. Enabling the one
+  // mode that defeats the app's whole purpose should never be a stray click.
+  tray.on("click", () => tray.popUpContextMenu());
 }
 
 // ---------------------------------------------------------------- boot -----
@@ -475,6 +528,14 @@ ipcMain.handle("y70:autostart", (_e, on) => (on === undefined ? getAutoStart() :
 ipcMain.handle("y70:taskbar", (_e, on) => (on === undefined ? showInTaskbar : setShowInTaskbar(on)));
 ipcMain.handle("y70:keyboard", (_e, on) => setKeyboardMode(on));
 ipcMain.handle("y70:keyboard-state", () => keyboardMode);
+ipcMain.handle("y70:keyboard-touch", () => { touchKeyboardMode(); return true; });
+ipcMain.handle("y70:passive-lock", (_e, on) =>
+  (on === undefined ? passiveLock : setPassiveLock(on)));
+ipcMain.handle("y70:focus-report", () => ({
+  keyboardMode, passiveLock, unwantedFocusCount,
+  focusable: win && !win.isDestroyed() ? win.isFocusable() : null,
+  focused: win && !win.isDestroyed() ? win.isFocused() : null,
+}));
 ipcMain.handle("y70:quit", () => { app.isQuiting = true; app.quit(); });
 ipcMain.handle("y70:reload", () => { if (win) win.reload(); });
 ipcMain.handle("y70:web-place", (_e, site, opts) => placeWebView(String(site), opts || {}));
