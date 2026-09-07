@@ -23,6 +23,9 @@ if "%HERE:~-1%"=="\" set "HERE=%HERE:~0,-1%"
 set "APP=%HERE%\v2"
 set "ELECTRON=%APP%\node_modules\electron\dist\electron.exe"
 set "PACKAGED=%APP%\dist\win-unpacked\Y70 Dashboard.exe"
+REM A locked dist\ (Defender sometimes keeps a handle on app.asar) makes
+REM electron-builder fall back to dist2\; look there too.
+if not exist "%PACKAGED%" set "PACKAGED=%APP%\dist2\win-unpacked\Y70 Dashboard.exe"
 
 REM Prefer the built app when it exists: it carries the icon and the real
 REM process name, and its "Start with Windows" toggle actually works.
