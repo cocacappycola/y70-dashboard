@@ -981,7 +981,13 @@ const server = http.createServer((req, res) => {
       return res.end("Not found: " + urlPath);
     }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
+    // Everything here is on the loopback interface, so caching buys nothing —
+    // and with no headers at all Chromium caches heuristically, which is how
+    // an updated stylesheet can keep rendering the old one after a restart.
+    res.writeHead(200, {
+      "Content-Type": MIME[ext] || "application/octet-stream",
+      "Cache-Control": "no-cache",
+    });
     res.end(data);
   });
 });

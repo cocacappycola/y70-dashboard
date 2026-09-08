@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="calc">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Calculator</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -16,14 +17,6 @@
     }
     #wrap { height: 100%; display: flex; flex-direction: column; padding: 8px 12px 10px; gap: 6px; }
 
-    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-    .chip {
-      width: 22px; height: 22px; border-radius: 6px;
-      background: var(--k-accent, #7c5cff); color: var(--k-accent-ink, #fff);
-      display: flex; align-items: center; justify-content: center; font-size: 13px;
-    }
-    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--k-sub, #a49cc4); }
-    .spacer { flex: 1; }
 
     /* ---- Display ---- */
     .screen {
@@ -56,19 +49,10 @@
       grid-template-columns: repeat(4, 1fr);
       grid-template-rows: repeat(5, minmax(0, 1fr));
     }
-    button {
-      font-family: inherit; border: 1px solid transparent; cursor: pointer;
-      background: var(--k-surface, #1c1a26); color: var(--k-text, #f0eefa);
-      border-radius: 10px; font-size: clamp(14px, 3.4vh, 22px); font-weight: 500;
-      min-height: 0; padding: 0; touch-action: manipulation;
-      display: flex; align-items: center; justify-content: center;
-    }
-    button:active { background: var(--k-surface-2, #272334); transform: scale(.96); }
-    /* Operators and the utility row read as chrome, digits as content. */
-    .op { color: var(--k-accent, #7c5cff); font-weight: 700; }
-    .fn { background: var(--k-bg-2, #14121c); color: var(--k-sub, #a49cc4); font-size: clamp(12px, 2.8vh, 17px); }
-    .eq { background: var(--k-accent, #7c5cff); color: var(--k-accent-ink, #fff); font-weight: 700; }
-    .eq:active { background: var(--k-accent-dim, #4a3a99); }
+    /* Shape, fills and the press state come from ui.css; a keypad only needs
+       to say how big its lettering is inside the cell it was given. */
+    .key { font-size: clamp(14px, 3.4vh, 22px); }
+    .key--fn { font-size: clamp(12px, 2.8vh, 17px); }
 
     /* Very short panels: the history line is the first thing to go. */
     @media (max-height: 190px) {
@@ -92,24 +76,24 @@
     </div>
 
     <div id="pad">
-      <button class="fn" data-k="C">C</button>
-      <button class="fn" data-k="back">⌫</button>
-      <button class="fn" data-k="%">%</button>
-      <button class="op" data-k="÷">÷</button>
+      <button class="key key--fn" data-k="C">C</button>
+      <button class="key key--fn" data-k="back">⌫</button>
+      <button class="key key--fn" data-k="%">%</button>
+      <button class="key key--op" data-k="÷">÷</button>
 
-      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
-      <button class="op" data-k="×">×</button>
+      <button class="key" data-k="7">7</button><button class="key" data-k="8">8</button><button class="key" data-k="9">9</button>
+      <button class="key key--op" data-k="×">×</button>
 
-      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
-      <button class="op" data-k="−">−</button>
+      <button class="key" data-k="4">4</button><button class="key" data-k="5">5</button><button class="key" data-k="6">6</button>
+      <button class="key key--op" data-k="−">−</button>
 
-      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
-      <button class="op" data-k="+">+</button>
+      <button class="key" data-k="1">1</button><button class="key" data-k="2">2</button><button class="key" data-k="3">3</button>
+      <button class="key key--op" data-k="+">+</button>
 
-      <button class="fn" data-k="neg">±</button>
-      <button data-k="0">0</button>
-      <button data-k=".">.</button>
-      <button class="eq" data-k="=">=</button>
+      <button class="key key--fn" data-k="neg">±</button>
+      <button class="key" data-k="0">0</button>
+      <button class="key" data-k=".">.</button>
+      <button class="key key--eq" data-k="=">=</button>
     </div>
   </div>
 

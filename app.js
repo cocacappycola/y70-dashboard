@@ -496,8 +496,8 @@ function drawSeek(ratio, posMs) {
 function go(view) {
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   $("#view-" + view).classList.add("active");
-  document.querySelectorAll(".chip").forEach((c) =>
-    c.classList.toggle("active", c.dataset.nav === view));
+  document.querySelectorAll("[data-nav]").forEach((c) =>
+    c.classList.toggle("is-on", c.dataset.nav === view));
   if (view === "queue") refreshQueue();
 }
 
@@ -915,7 +915,7 @@ function buildQueueView() {
   const lbl = label("From this playlist", '<span id="source-count"></span>');
   const addAll = document.createElement("button");
   addAll.id = "add-all";
-  addAll.className = "btn-primary small";
+  addAll.className = "btn btn--primary btn--round btn--sm";
   addAll.textContent = "Add all";
   addAll.onclick = () => {
     let n = 0;
@@ -1437,7 +1437,7 @@ function wireUI() {
   });
 
   // Nav chips + back buttons
-  document.querySelectorAll(".chip").forEach((c) => { c.onclick = () => go(c.dataset.nav); });
+  document.querySelectorAll("[data-nav]").forEach((c) => { c.onclick = () => go(c.dataset.nav); });
   $("#pl-back").onclick = () => go("home");
   $("#q-back").onclick = () => go("home");
 

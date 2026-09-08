@@ -1,0 +1,294 @@
+/* ============================================================================
+   Y70 controls — one set of buttons, headers and scrollbars for every surface.
+
+   Each page declares which palette family it belongs to:
+
+       <html data-surface="discord">
+
+   theme.js reads that and copies the family (--d-accent, --d-card, …) onto the
+   generic --ui-* names this file is written against, so a control looks the
+   same everywhere while still wearing its own widget's accent. Change a radius
+   or a press state here and it changes in all of them.
+
+   Every value below has a fallback, so a page still renders correctly if
+   theme.js never runs.
+   ============================================================================ */
+
+:root {
+  /* Shape. Three radii and three heights, and nothing in between — the mix of
+     8/9/10/11/12px that grew up across the widgets is what made them read as
+     separate apps sitting next to each other. */
+  --r-sm: 9px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  /* Height. Everything tappable is at least 34px, and the standard control is
+     44px: this is a touchscreen with no cursor to aim with. */
+  /* 38 / 44 / 60. On this panel one logical pixel is about 0.15mm, so 44px
+     lands near the 7mm target for a fingertip and 38 is the smallest thing
+     worth aiming at. */
+  --h-sm: 38px;
+  --h-md: 44px;
+  --h-lg: 60px;
+
+  --ui-gap: 8px;
+  --ui-press: 0.97;
+  --ui-fast: .12s ease;
+
+  /* One red, everywhere. Muted mics, deafened sound, delete: three widgets had
+     three different reds (#ed4245, #ff5a5a, #ff4444) for the same meaning. */
+  --ui-danger: #ff5b6e;
+  --ui-danger-soft: rgba(255, 91, 110, .22);
+  --ui-danger-line: rgba(255, 91, 110, .6);
+  --ui-danger-ink: #ffdfe4;
+  /* And one green, for "live" / speaking / connected. */
+  --ui-live: #46d18a;
+}
+
+/* ---------------------------------------------------------------- buttons --
+   .btn is the whole system: a centred pill of a fixed height. The modifiers
+   change only fill and border, never geometry, so a row of mixed variants
+   still lines up.                                                            */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--ui-gap);
+  min-height: var(--h-md); padding: 0 16px;
+  border-radius: var(--r-md);
+  background: var(--ui-card, rgba(255, 255, 255, .06));
+  border: 1px solid var(--ui-card-line, rgba(255, 255, 255, .12));
+  color: var(--ui-text, #fff);
+  font-family: inherit; font-size: 13px; font-weight: 600; line-height: 1;
+  cursor: pointer; user-select: none; white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background var(--ui-fast), border-color var(--ui-fast),
+              color var(--ui-fast), transform .06s ease;
+}
+.btn:active { background: var(--ui-surface-2, rgba(255, 255, 255, .13)); transform: scale(var(--ui-press)); }
+.btn:focus-visible { outline: 2px solid var(--ui-accent, #A85CD6); outline-offset: 2px; }
+.btn:disabled, .btn[disabled] { opacity: .38; cursor: default; }
+.btn:disabled:active, .btn[disabled]:active { transform: none; background: var(--ui-card, rgba(255, 255, 255, .06)); }
+
+.btn--sm { min-height: var(--h-sm); padding: 0 12px; font-size: 12px; border-radius: var(--r-sm); }
+.btn--lg { min-height: var(--h-lg); padding: 0 20px; font-size: 15px; border-radius: var(--r-lg); }
+
+/* Filled with the surface's accent: one per screen at most. */
+.btn--primary {
+  background: var(--ui-accent, #A85CD6);
+  border-color: var(--ui-accent, #A85CD6);
+  color: var(--ui-accent-ink, #fff);
+  font-weight: 700;
+}
+.btn--primary:active { background: var(--ui-accent-dim, #5c327a); }
+
+/* Outline only — the quieter half of a pair. */
+.btn--ghost {
+  background: transparent;
+  border-color: var(--ui-card-line, rgba(255, 255, 255, .14));
+  color: var(--ui-sub, #b9b6c4);
+  font-weight: 600;
+}
+.btn--ghost:active { background: var(--ui-card, rgba(255, 255, 255, .07)); }
+
+/* No chrome at all, for icons that sit inside something else. */
+.btn--quiet { background: transparent; border-color: transparent; color: var(--ui-sub, #b9b6c4); }
+.btn--quiet:active { background: var(--ui-card, rgba(255, 255, 255, .08)); }
+
+/* Square. Pair with a size modifier to get 34 / 44 / 60. */
+.btn--icon { width: var(--h-md); min-width: var(--h-md); padding: 0; font-size: 15px; }
+.btn--icon.btn--sm { width: var(--h-sm); min-width: var(--h-sm); }
+.btn--icon.btn--lg { width: var(--h-lg); min-width: var(--h-lg); }
+.btn--round { border-radius: var(--r-pill); }
+
+/* A pill of a chip — presets, filters, tabs. */
+.btn--chip { min-height: var(--h-sm); padding: 0 14px; font-size: 12.5px; border-radius: var(--r-pill); }
+
+/* ------------------------------------------------------------- tile-btn ---
+   The two-line control: a title with a status dot, and a line of plain
+   English underneath saying what tapping it does. Discord's mic and sound,
+   the audio hub's mic and Discord mutes.                                    */
+.tile-btn {
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
+  gap: 3px;
+  flex: 1; min-width: 0;
+  min-height: var(--h-lg); padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--ui-card, rgba(255, 255, 255, .06));
+  border: 1px solid var(--ui-card-line, rgba(255, 255, 255, .12));
+  color: var(--ui-text, #fff);
+  font-family: inherit; text-align: left;
+  cursor: pointer; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background var(--ui-fast), border-color var(--ui-fast), transform .06s ease;
+}
+.tile-btn:active { background: var(--ui-surface-2, rgba(255, 255, 255, .13)); transform: scale(0.985); }
+.tile-btn:focus-visible { outline: 2px solid var(--ui-accent, #A85CD6); outline-offset: 2px; }
+.tile-btn:disabled { opacity: .38; cursor: default; }
+.tile-btn:disabled:active { transform: none; }
+.tile-btn .t-top {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 14px; font-weight: 700; min-width: 0; width: 100%;
+}
+.tile-btn .t-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-btn .t-sub {
+  font-size: 10px; font-weight: 500; color: var(--ui-muted, #8b8798);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.tile-btn.is-on { color: var(--ui-accent, #A85CD6); }
+.tile-btn.is-on .t-sub { color: var(--ui-accent, #A85CD6); opacity: .75; }
+.tile-btn.is-danger { color: var(--ui-danger-ink); }
+.tile-btn.is-danger .t-sub { color: var(--ui-danger); }
+
+/* The dot carries the state at a glance, so it reads from across the room
+   before any of the words do. */
+.dot {
+  width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+  background: var(--ui-accent, #A85CD6);
+  /* A halo, so the state is legible from across the room before the words are. */
+  box-shadow: 0 0 0 3px var(--ui-accent-soft, rgba(168, 92, 214, .16));
+}
+.is-danger .dot { background: var(--ui-danger); box-shadow: 0 0 0 3px var(--ui-danger-soft); }
+.dot--live { background: var(--ui-live); }
+.dot--off { background: var(--ui-muted, #8b8798); }
+
+/* -------------------------------------------------------------- row-btn ---
+   A full-width row in a list you pick from: output devices, saved scenes.   */
+.row-btn {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: var(--h-md); padding: 0 12px;
+  border-radius: var(--r-sm);
+  background: var(--ui-card, rgba(255, 255, 255, .05));
+  border: 1px solid transparent;
+  color: var(--ui-text, #fff);
+  font-family: inherit; font-size: 12.5px; text-align: left;
+  cursor: pointer; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background var(--ui-fast), border-color var(--ui-fast);
+}
+.row-btn:active { background: var(--ui-surface-2, rgba(255, 255, 255, .1)); }
+.row-btn:focus-visible { outline: 2px solid var(--ui-accent, #A85CD6); outline-offset: -2px; }
+.row-btn .r-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-btn.is-on { font-weight: 600; }
+.row-btn .r-mark { color: var(--ui-accent, #A85CD6); font-size: 13px; flex-shrink: 0; }
+
+/* ------------------------------------------------------------------ keys --
+   Calculator. They fill their grid cell rather than carrying a height.      */
+.key {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 0; padding: 0;
+  border-radius: var(--r-md);
+  background: var(--ui-card, rgba(255, 255, 255, .05));
+  border: 1px solid transparent;
+  color: var(--ui-text, #fff);
+  font-family: inherit; font-weight: 500;
+  cursor: pointer; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background var(--ui-fast), transform .06s ease;
+}
+.key:active { background: var(--ui-surface-2, rgba(255, 255, 255, .14)); transform: scale(var(--ui-press)); }
+.key--fn { background: var(--ui-bg-2, rgba(255, 255, 255, .02)); color: var(--ui-sub, #b9b6c4); }
+.key--op { color: var(--ui-accent, #A85CD6); font-weight: 700; }
+.key--eq { background: var(--ui-accent, #A85CD6); color: var(--ui-accent-ink, #fff); font-weight: 700; }
+.key--eq:active { background: var(--ui-accent-dim, #5c327a); }
+
+/* ---------------------------------------------------------------- inputs -- */
+.ui-input {
+  flex: 1; min-width: 0;
+  min-height: var(--h-md); padding: 0 12px;
+  border-radius: var(--r-md);
+  background: var(--ui-card, rgba(255, 255, 255, .06));
+  border: 1px solid var(--ui-card-line, rgba(255, 255, 255, .14));
+  color: var(--ui-text, #fff);
+  font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+  outline: none;
+  /* Widget bodies are user-select:none, which would otherwise block paste. */
+  -webkit-user-select: text; user-select: text;
+}
+.ui-input:focus { border-color: var(--ui-accent, #A85CD6); }
+.ui-input::placeholder { color: var(--ui-muted, #8b8798); }
+
+/* ---------------------------------------------------------------- range --
+   Sliders. The filled part is drawn into the track by a --fill percentage the
+   page keeps up to date, so there is no second element to position.         */
+.ui-range {
+  -webkit-appearance: none; appearance: none;
+  flex: 1; height: 22px; background: transparent; margin: 0;
+  touch-action: none;
+}
+.ui-range::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 3px;
+  background: linear-gradient(to right,
+    var(--ui-accent, #A85CD6) var(--fill, 50%),
+    var(--ui-surface-2, rgba(255, 255, 255, .13)) var(--fill, 50%));
+}
+.ui-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--ui-text, #fff); margin-top: -6px;
+}
+.ui-range:disabled { opacity: .4; }
+
+/* ---------------------------------------------------------------- header --
+   Every widget opens the same way: accent chip, name, then whatever it wants
+   pushed to the right.                                                      */
+.head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.head .chip {
+  width: 22px; height: 22px; border-radius: 7px; flex-shrink: 0;
+  background: var(--ui-accent, #A85CD6); color: var(--ui-accent-ink, #fff);
+  display: flex; align-items: center; justify-content: center; font-size: 12px;
+}
+.head .label {
+  font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ui-sub, #b9b6c4); white-space: nowrap;
+}
+.head .spacer, .spacer { flex: 1; }
+.head .note {
+  font-size: 10px; color: var(--ui-muted, #8b8798);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.foot { flex-shrink: 0; font-size: 9px; color: var(--ui-muted, #8b8798); }
+.sec {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ui-muted, #8b8798); flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------- scrolling --
+   One thin accent bar. Note there is deliberately no `scrollbar-width` here:
+   setting it (even to `thin`) switches Chromium to the standard scrollbar and
+   silently discards every ::-webkit-scrollbar rule below.                   */
+.scroll-y {
+  overflow-y: auto; overscroll-behavior: contain; min-height: 0;
+  touch-action: pan-y;
+}
+.scroll-y::-webkit-scrollbar { width: 5px; height: 5px; }
+.scroll-y::-webkit-scrollbar-track { background: transparent; }
+.scroll-y::-webkit-scrollbar-thumb {
+  background: var(--ui-accent-dim, #5c327a); border-radius: 3px;
+}
+.scroll-y::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+.scroll-y::-webkit-scrollbar-corner { background: transparent; }
+
+/* ------------------------------------------------------------- selection --
+   .is-on is "this one is chosen" and is the same shape everywhere: accent
+   border, a wash of accent behind, accent text. .is-danger is "you are
+   silenced" and is the only place red appears.
+
+   These live at the end of the file on purpose. They carry no more weight
+   than .btn or .tile-btn do, so whichever is written last wins — and what a
+   control is doing has to beat what it is.                                  */
+.is-on {
+  background: var(--ui-accent-soft, rgba(168, 92, 214, .16));
+  border-color: var(--ui-accent-line, rgba(168, 92, 214, .34));
+  color: var(--ui-accent, #A85CD6);
+}
+.is-on:active { background: var(--ui-accent-soft, rgba(168, 92, 214, .22)); }
+.is-danger {
+  background: var(--ui-danger-soft);
+  border-color: var(--ui-danger-line);
+  color: var(--ui-danger-ink);
+}
+.is-danger:active { background: var(--ui-danger-soft); }

@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="tools">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Notes</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -15,36 +16,18 @@
       overflow: hidden;
     }
     #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 12px 8px; gap: 6px; }
-    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; user-select: none; }
-    .chip {
-      width: 22px; height: 22px; border-radius: 6px;
-      background: var(--u-accent, #e8d44d); color: var(--u-accent-ink, #000);
-      display: flex; align-items: center; justify-content: center; font-size: 12px;
-    }
-    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--u-sub, #b0aa8e); }
-    .spacer { flex: 1; }
-    #status { font-size: 9.5px; color: var(--u-muted, #7d7960); white-space: nowrap; }
-    .btn {
-      background: var(--u-card, rgba(255,255,255,.05));
-      border: 1px solid var(--u-card-line, rgba(255,255,255,.1));
-      color: var(--u-sub, #b0aa8e); border-radius: 8px; padding: 5px 10px;
-      font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
-    }
-    .btn:active { background: var(--u-surface-2, rgba(255,255,255,.13)); }
+    .head { user-select: none; }
 
     #pad {
       flex: 1; min-height: 0; width: 100%; resize: none;
       background: var(--u-card, rgba(255,255,255,.04));
       border: 1px solid var(--u-card-line, rgba(255,255,255,.09));
-      border-radius: 10px; padding: 10px 12px;
+      border-radius: var(--r-md); padding: 10px 12px;
       color: var(--u-text, #f5f2e6); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
       font-size: 13px; line-height: 1.55; outline: none;
       -webkit-user-select: text; user-select: text;
     }
     #pad:focus { border-color: var(--u-accent-line, rgba(232,212,77,.45)); }
-    #pad::-webkit-scrollbar { width: 6px; height: 6px; }
-    #pad::-webkit-scrollbar-thumb { background: var(--u-accent-dim, #4a4630); border-radius: 3px; }
-    #pad::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
     #pad::placeholder { color: var(--u-muted, #7d7960); }
   </style>
 </head>
@@ -54,10 +37,10 @@
       <div class="chip">✎</div>
       <div class="label">Notes</div>
       <div class="spacer"></div>
-      <div id="status">…</div>
-      <button class="btn" id="stamp">＋ date</button>
+      <div class="note" id="status">…</div>
+      <button class="btn btn--ghost btn--sm" id="stamp">＋ date</button>
     </div>
-    <textarea id="pad" placeholder="Type anything. It saves itself to notes.txt in the dashboard folder." spellcheck="false"></textarea>
+    <textarea id="pad" class="scroll-y" placeholder="Type anything. It saves itself to notes.txt in the dashboard’s data folder." spellcheck="false"></textarea>
   </div>
 
   <script>

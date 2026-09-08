@@ -765,7 +765,7 @@ document.querySelectorAll(".ov-btn").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const k = btn.dataset.ov;
     overlays[k] = !overlays[k];
-    btn.classList.toggle("on", overlays[k]);
+    btn.classList.toggle("is-on", overlays[k]);
     if (k === "rain") { if (overlays.rain && !radarPath) await loadRadar(); renderTiles(); }
     if (k === "wind") { if (overlays.wind && !windGrid) await loadWindGrid(); seedWind(); }
     if (k === "aqi") { if (overlays.aqi && !aqiGrid) await loadAqiGrid(); paintAqi(); }

@@ -1,9 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="media">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Spotify · Y70</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="ui.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -27,7 +29,7 @@
       <div class="brand-mark">♫</div>
       <h1>Spotify · Y70</h1>
       <p id="login-note">Playlists &amp; queue, on your Y70 screen.</p>
-      <button id="login-btn" class="btn-primary big">Connect Spotify</button>
+      <button id="login-btn" class="btn btn--primary btn--round btn--lg">Connect Spotify</button>
     </div>
   </section>
 
@@ -40,8 +42,8 @@
         <div class="home-top">
           <div class="home-title">Your Library</div>
           <div class="chips">
-            <button class="chip active" data-nav="home">Playlists</button>
-            <button class="chip" data-nav="queue">Queue</button>
+            <button class="btn btn--chip is-on" data-nav="home">Playlists</button>
+            <button class="btn btn--chip" data-nav="queue">Queue</button>
           </div>
           <div class="searchbox">
             <span id="search-ico" class="search-ico"></span>

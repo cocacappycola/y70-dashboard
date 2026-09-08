@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="trim">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Y70 Dashboard</title>
   <script src="theme.js"></script>
+  <link rel="stylesheet" href="ui.css" />
   <link rel="stylesheet" href="shell.css" />
 </head>
 <body>
@@ -48,13 +49,13 @@
           <span class="spacer"></span>
           <span id="phone-batt"></span>
         </div>
-        <div id="phone-list"></div>
+        <div id="phone-list" class="scroll-y"></div>
 
         <div class="sec-title">Scenes</div>
         <div class="tile-row" id="scene-row"></div>
         <div class="scene-actions">
-          <button class="set-reset" id="scene-save">Save layout</button>
-          <button class="set-reset" id="scene-reset">Reset to packed</button>
+          <button class="btn btn--ghost btn--chip" id="scene-save">Save layout</button>
+          <button class="btn btn--ghost btn--chip" id="scene-reset">Reset to packed</button>
         </div>
 
         <div class="sec-title">Apps</div>
@@ -90,16 +91,16 @@
           <span class="sec-hint" id="update-status"></span>
         </div>
         <div class="tile-row native-only">
-          <button class="set-reset" id="update-check">Check for updates</button>
-          <button class="set-reset" id="update-install" style="display:none">Restart to update</button>
+          <button class="btn btn--ghost btn--chip" id="update-check">Check for updates</button>
+          <button class="btn btn--ghost btn--chip" id="update-install" style="display:none">Restart to update</button>
         </div>
         <div class="tile-row native-only">
-          <button class="set-reset" id="kb-toggle">Keyboard mode: off</button>
-          <button class="set-reset" id="passive-lock">Never take focus: off</button>
-          <button class="set-reset" id="native-autostart">Start with Windows: off</button>
-          <button class="set-reset" id="native-taskbar">Taskbar icon: off</button>
-          <button class="set-reset" id="native-reload">Reload</button>
-          <button class="set-reset" id="native-quit">Quit</button>
+          <button class="btn btn--ghost btn--chip" id="kb-toggle">Keyboard mode: off</button>
+          <button class="btn btn--ghost btn--chip" id="passive-lock">Never take focus: off</button>
+          <button class="btn btn--ghost btn--chip" id="native-autostart">Start with Windows: off</button>
+          <button class="btn btn--ghost btn--chip" id="native-taskbar">Taskbar icon: off</button>
+          <button class="btn btn--ghost btn--chip" id="native-reload">Reload</button>
+          <button class="btn btn--ghost btn--chip" id="native-quit">Quit</button>
         </div>
 
         <div class="sec-title">Settings</div>
@@ -116,13 +117,13 @@
       <!-- ---- Settings view (swaps in over the drawer) ---- -->
       <div class="settings-inner hidden" id="settings-view">
         <div class="set-head">
-          <button class="set-back" id="settings-back" aria-label="Back">‹</button>
+          <button class="btn btn--quiet btn--icon set-back" id="settings-back" aria-label="Back">‹</button>
           <div class="set-title">Appearance</div>
           <div class="panel-spacer"></div>
-          <button class="set-reset" id="settings-reset">Reset</button>
+          <button class="btn btn--ghost btn--chip" id="settings-reset">Reset</button>
         </div>
 
-        <div class="set-scroll">
+        <div class="set-scroll scroll-y">
           <div class="set-label">Presets</div>
           <div class="preset-row" id="preset-row"></div>
 

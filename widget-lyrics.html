@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="media">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lyrics</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -16,13 +17,6 @@
     }
     #wrap { height: 100%; display: flex; flex-direction: column; padding: 8px 0 0; }
     .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 0 14px 4px; }
-    .chip {
-      width: 22px; height: 22px; border-radius: 6px;
-      background: var(--m-accent, #1ed760); color: var(--m-accent-ink, #000);
-      display: flex; align-items: center; justify-content: center; font-size: 12px;
-    }
-    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--m-sub, #9fb5a6); }
-    .spacer { flex: 1; }
     #track { font-size: 10px; color: var(--m-muted, #6d8073); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 58%; }
 
     #scroll {
@@ -32,9 +26,6 @@
       -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 82%, transparent 100%);
               mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 82%, transparent 100%);
     }
-    #scroll::-webkit-scrollbar { width: 5px; }
-    #scroll::-webkit-scrollbar-thumb { background: var(--m-accent-dim, #14803a); border-radius: 3px; }
-    #scroll::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 
     .line {
       font-size: clamp(14px, 2.6vh, 20px); line-height: 1.34; font-weight: 600;
@@ -66,7 +57,7 @@
       <div class="spacer"></div>
       <div id="track"></div>
     </div>
-    <div id="scroll" style="display:none"></div>
+    <div id="scroll" class="scroll-y" style="display:none"></div>
     <div id="msg">Waiting for something to play…</div>
     <div class="foot"><span id="mode"></span><span class="spacer"></span><span>lrclib.net</span></div>
   </div>

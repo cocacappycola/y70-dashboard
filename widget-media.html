@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="media">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Now playing</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -15,14 +16,6 @@
       overflow: hidden; user-select: none;
     }
     #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 14px 0; gap: 8px; }
-    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-    .chip {
-      width: 22px; height: 22px; border-radius: 6px;
-      background: var(--m-accent, #1ed760); color: var(--m-accent-ink, #000);
-      display: flex; align-items: center; justify-content: center; font-size: 12px;
-    }
-    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--m-sub, #9fb5a6); }
-    .spacer { flex: 1; }
     /* Which program Windows says owns the sound right now. */
     #src {
       font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
@@ -46,18 +39,10 @@
     #album { font-size: 10px; color: var(--m-muted, #6d8073); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 
     .ctl-row { display: flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; }
-    .ctl {
-      background: transparent; border: none; color: var(--m-sub, #9fb5a6); cursor: pointer;
-      width: 44px; height: 40px; border-radius: 10px; font-size: 17px; font-family: inherit;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .ctl:active { color: var(--m-text, #fff); transform: scale(.92); }
-    .ctl:disabled { opacity: .28; }
-    #play {
-      background: var(--m-accent, #1ed760); color: var(--m-accent-ink, #000);
-      width: 46px; height: 46px; border-radius: 50%; font-size: 18px;
-    }
-    #play:active { background: var(--m-accent-dim, #14803a); }
+    /* Transport: shared round icon buttons, with play a size up so the thumb
+       lands on it without looking. */
+    .ctl { font-size: 17px; }
+    #play { width: 52px; min-width: 52px; min-height: 52px; font-size: 19px; }
 
     .times { display: flex; justify-content: space-between; font-size: 9.5px; color: var(--m-muted, #6d8073); font-variant-numeric: tabular-nums; }
     #seek { height: 6px; position: relative; cursor: pointer; touch-action: none; flex-shrink: 0; border-radius: 3px; overflow: hidden; }
@@ -89,9 +74,9 @@
         </div>
       </div>
       <div class="ctl-row">
-        <button class="ctl" id="prev">⏮</button>
-        <button class="ctl" id="play">▶</button>
-        <button class="ctl" id="next">⏭</button>
+        <button class="btn btn--quiet btn--icon btn--round ctl" id="prev">⏮</button>
+        <button class="btn btn--primary btn--icon btn--round ctl" id="play">▶</button>
+        <button class="btn btn--quiet btn--icon btn--round ctl" id="next">⏭</button>
       </div>
       <div class="times"><span id="t-pos">0:00</span><span id="t-dur">0:00</span></div>
       <div id="seek"><div id="fill"></div></div>

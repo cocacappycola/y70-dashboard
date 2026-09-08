@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="weather">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Weather</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <link rel="stylesheet" href="weather-app.css" />
 </head>
 <body>
@@ -24,7 +25,7 @@
         <span id="aqi-dot" class="aqi-dot"></span>
         <span><b id="aqi-num">—</b> AQI</span>
       </div>
-      <button id="refresh" class="iconbtn" aria-label="Refresh">↻</button>
+      <button id="refresh" class="btn btn--ghost btn--icon btn--sm btn--round iconbtn" aria-label="Refresh">↻</button>
     </header>
 
     <div id="scroll">
@@ -63,7 +64,7 @@
           Radar &amp; overlays
           <span class="spacer"></span>
           <span id="map-status" class="map-status"></span>
-          <button id="map-base" class="map-base">Esri Dark</button>
+          <button id="map-base" class="btn btn--ghost btn--chip map-base">Esri Dark</button>
         </div>
         <div id="map">
           <div id="map-world"></div>
@@ -77,9 +78,9 @@
           <div id="map-legend" class="hidden"></div>
         </div>
         <div class="overlay-row">
-          <button class="ov-btn on" data-ov="rain"><span class="ov-ico">🌧️</span>Rain</button>
-          <button class="ov-btn" data-ov="wind"><span class="ov-ico">💨</span>Wind</button>
-          <button class="ov-btn" data-ov="aqi"><span class="ov-ico">🫁</span>AQI</button>
+          <button class="btn btn--ghost btn--chip ov-btn is-on" data-ov="rain"><span class="ov-ico">🌧️</span>Rain</button>
+          <button class="btn btn--ghost btn--chip ov-btn" data-ov="wind"><span class="ov-ico">💨</span>Wind</button>
+          <button class="btn btn--ghost btn--chip ov-btn" data-ov="aqi"><span class="ov-ico">🫁</span>AQI</button>
         </div>
       </section>
 

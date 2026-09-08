@@ -1,6 +1,6 @@
 {
   "name": "y70-dashboard",
-  "version": "2.3.3",
+  "version": "2.4.0",
   "private": true,
   "description": "Native shell for the HYTE Y70 Touch dashboard \u2014 a window that never steals focus.",
   "author": "Cappy",
@@ -50,6 +50,7 @@
           "weather-app.html",
           "widget-*.html",
           "styles.css",
+          "ui.css",
           "shell.css",
           "weather-app.css",
           "pcstats.ps1",

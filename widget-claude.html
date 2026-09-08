@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="claude">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Claude Usage</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -15,19 +16,7 @@
       overflow: hidden; user-select: none;
     }
     #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 16px 8px; gap: 6px; }
-    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-    .spark {
-      width: 22px; height: 22px; border-radius: 6px; background: var(--c-accent, #d97757); color: var(--c-accent-ink, #fff);
-      display: flex; align-items: center; justify-content: center; font-size: 13px;
-    }
-    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--c-sub, #b8a99e); }
-    .spacer { flex: 1; }
     #model { font-size: 10px; color: var(--c-muted, #7d7068); }
-    #refresh {
-      background: var(--c-card, rgba(255,255,255,.07)); border: none; color: var(--c-sub, #d9cec6); cursor: pointer;
-      width: 30px; height: 30px; border-radius: 50%; font-size: 14px;
-    }
-    #refresh:active { background: rgba(255,255,255,.18); }
 
     /* Hero row */
     .hero { display: flex; align-items: baseline; gap: 14px; flex-shrink: 0; }
@@ -54,18 +43,17 @@
     .col.today .d-label { color: var(--c-sub, #b8a99e); font-weight: 700; }
     .d-val { font-size: 9px; color: var(--c-sub, #b8a99e); height: 11px; }
 
-    .foot { flex-shrink: 0; font-size: 9.5px; color: var(--c-muted, #7d7068); }
     #empty { flex: 1; display: flex; align-items: center; color: var(--c-sub, #b8a99e); font-size: 13px; }
   </style>
 </head>
 <body>
   <div id="wrap">
     <div class="head">
-      <div class="spark">✳</div>
+      <div class="chip">✳</div>
       <div class="label">Claude usage</div>
       <div class="spacer"></div>
       <div id="model"></div>
-      <button id="refresh" aria-label="Refresh">↻</button>
+      <button class="btn btn--quiet btn--icon btn--sm btn--round" id="refresh" aria-label="Refresh">↻</button>
     </div>
 
     <div id="content" style="display:none; flex:1; min-height:0; display:flex; flex-direction:column; gap:6px;">

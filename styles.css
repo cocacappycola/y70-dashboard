@@ -1,20 +1,23 @@
 /* ===========================================================================
-   Spotify · Y70 — styled to match Spotify's own dark UI.
-   Palette / spacing lifted from the real app: #121212 bg, #181818 cards,
-   #282828 hover, #b3b3b3 secondary text, #1ed760 green.
+   Spotify · Y70 — laid out like Spotify's own dark UI, but wearing whatever
+   palette the dashboard is set to. The spacing and structure are lifted from
+   the real app; the colours come from theme.js's "media" family, whose
+   Default preset is Spotify's own #121212 / #1ed760 — so this looks exactly
+   like Spotify there, and like the rest of the dashboard everywhere else.
    =========================================================================== */
 
 :root {
-  --bg: #121212;
-  --bg-deep: #000;
-  --card: #181818;
-  --card-hover: #282828;
-  --elev: #242424;
-  --text: #ffffff;
-  --sub: #b3b3b3;
-  --green: #1ed760;
-  --green-press: #169c46;
-  --seek-track: #4d4d4d;
+  --bg: var(--m-bg, #121212);
+  --bg-deep: var(--m-bg-2, #000);
+  --card: var(--m-surface, #181818);
+  --card-hover: var(--m-surface-2, #282828);
+  --elev: var(--m-surface, #242424);
+  --text: var(--m-text, #ffffff);
+  --sub: var(--m-sub, #b3b3b3);
+  --green: var(--m-accent, #1ed760);
+  --green-ink: var(--m-accent-ink, #000);
+  --green-press: var(--m-accent-dim, #169c46);
+  --seek-track: var(--m-line, #4d4d4d);
   --tap: 48px;
 }
 
@@ -54,18 +57,13 @@ button { font-family: inherit; }
 }
 .brand-mark {
   width: 84px; height: 84px; margin: 0 auto 16px; border-radius: 50%;
-  background: var(--green); color: #000; font-size: 42px;
+  background: var(--green); color: var(--green-ink); font-size: 42px;
   display: flex; align-items: center; justify-content: center; font-weight: 700;
 }
 .login-card p { color: var(--sub); margin: 6px 0 28px; }
 
-.btn-primary {
-  background: var(--green); color: #000; border: none; font-weight: 700;
-  border-radius: 999px; padding: 14px 28px; font-size: 16px; cursor: pointer;
-  transition: transform .06s ease, background .15s ease;
-}
-.btn-primary:active { transform: scale(.97); background: var(--green-press); }
-.btn-primary.big { padding: 18px 44px; font-size: 18px; }
+/* The login button is a shared .btn--primary; it only wants more room. */
+#login-btn { padding: 0 44px; font-size: 18px; }
 
 /* ---------- App shell ---------- */
 #app { display: flex; flex-direction: column; }
@@ -81,12 +79,6 @@ button { font-family: inherit; }
 .home-title { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-bottom: 12px; }
 
 .chips { display: flex; gap: 8px; margin-bottom: 12px; }
-.chip {
-  background: var(--card-hover); color: var(--text); border: none; cursor: pointer;
-  border-radius: 999px; padding: 8px 16px; font-size: 14px; font-weight: 500;
-  transition: background .15s ease;
-}
-.chip.active { background: var(--text); color: #000; font-weight: 600; }
 
 .searchbox {
   display: flex; align-items: center; gap: 10px;
@@ -155,7 +147,7 @@ button { font-family: inherit; }
 .playfab {
   position: absolute; right: 20px; bottom: -26px; z-index: 6;
   width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
-  background: var(--green); color: #000;
+  background: var(--green); color: var(--green-ink);
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 8px 16px rgba(0,0,0,.4);
   transition: transform .06s ease, background .15s ease;
@@ -291,7 +283,7 @@ button { font-family: inherit; }
 
 .playbtn {
   width: 52px; height: 52px; border-radius: 50%; border: none; cursor: pointer;
-  background: var(--text); color: #000; margin: 0 6px;
+  background: var(--m-accent, #fff); color: var(--m-accent-ink, #000); margin: 0 6px;
   display: flex; align-items: center; justify-content: center;
   transition: transform .06s ease;
 }

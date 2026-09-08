@@ -192,6 +192,20 @@
     return out;
   }
 
+  // Which family a page belongs to, declared as <html data-surface="discord">.
+  // ui.css is written against generic --ui-* names so one set of control
+  // styles can dress every surface; this copies the chosen family onto them
+  // rather than making each page restate sixteen aliases by hand.
+  const SURFACE = {
+    trim: "--t-", weather: "--w-", claude: "--c-", pc: "--p-", calc: "--k-",
+    media: "--m-", tools: "--u-", discord: "--d-", web: "--v-",
+  };
+  const UI_KEYS = [
+    "accent", "accent-ink", "accent-dim", "accent-soft", "accent-line",
+    "bg", "bg-2", "grad", "surface", "surface-2", "line",
+    "text", "sub", "muted", "card", "card-line",
+  ];
+
   let current = null;
   const listeners = [];
 
@@ -200,6 +214,9 @@
     const s = document.documentElement.style;
     const v = vars(current);
     for (const k in v) s.setProperty(k, v[k]);
+
+    const prefix = SURFACE[document.documentElement.getAttribute("data-surface")];
+    if (prefix) for (const k of UI_KEYS) s.setProperty("--ui-" + k, v[prefix + k]);
     for (const fn of listeners) { try { fn(current); } catch (e) { /* keep going */ } }
     return current;
   }

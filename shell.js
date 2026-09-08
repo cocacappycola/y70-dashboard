@@ -729,11 +729,11 @@ function wireNative() {
   const lock = $("#passive-lock");
   const paintLock = (on) => {
     lock.textContent = "Never take focus: " + (on ? "ON" : "off");
-    lock.classList.toggle("on", !!on);
+    lock.classList.toggle("is-on", !!on);
   };
   native.getPassiveLock().then(paintLock).catch(() => {});
   lock.addEventListener("pointerup", async () => {
-    paintLock(await native.setPassiveLock(!lock.classList.contains("on")));
+    paintLock(await native.setPassiveLock(!lock.classList.contains("is-on")));
   });
 
   // Version + updates.
@@ -748,7 +748,7 @@ function wireNative() {
 
   // Start with Windows / taskbar presence, read back from the OS rather than
   // remembered here, so the buttons always show the truth.
-  const paint = (el, on, label) => { el.textContent = label + (on ? ": on" : ": off"); el.classList.toggle("on", !!on); };
+  const paint = (el, on, label) => { el.textContent = label + (on ? ": on" : ": off"); el.classList.toggle("is-on", !!on); };
   const auto = $("#native-autostart"), tb = $("#native-taskbar");
   native.getAutoStart().then((v) => paint(auto, v, "Start with Windows")).catch(() => {});
   // Say so rather than quietly misbehaving: run from source, the Run key is
@@ -758,11 +758,11 @@ function wireNative() {
   }).catch(() => {});
   native.getShowInTaskbar().then((v) => paint(tb, v, "Taskbar icon")).catch(() => {});
   auto.addEventListener("pointerup", async () => {
-    const on = await native.setAutoStart(!auto.classList.contains("on"));
+    const on = await native.setAutoStart(!auto.classList.contains("is-on"));
     paint(auto, on, "Start with Windows");
   });
   tb.addEventListener("pointerup", async () => {
-    const on = await native.setShowInTaskbar(!tb.classList.contains("on"));
+    const on = await native.setShowInTaskbar(!tb.classList.contains("is-on"));
     paint(tb, on, "Taskbar icon");
   });
   $("#native-reload").addEventListener("pointerup", () => native.reload());

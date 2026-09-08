@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="pc">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PC stats</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -16,14 +17,6 @@
     }
     #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 16px 8px; gap: 6px; }
 
-    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-    .chip {
-      width: 22px; height: 22px; border-radius: 6px;
-      background: var(--p-accent, #42d6c3); color: var(--p-accent-ink, #000);
-      display: flex; align-items: center; justify-content: center; font-size: 13px;
-    }
-    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--p-sub, #93a8a4); }
-    .spacer { flex: 1; }
     #cpuname {
       font-size: 10px; color: var(--p-muted, #6d7f7c); white-space: nowrap;
       overflow: hidden; text-overflow: ellipsis; max-width: 46%;
@@ -82,10 +75,7 @@
       font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
       color: var(--p-sub, #93a8a4); margin-top: 2px;
     }
-    #list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-    #list::-webkit-scrollbar { width: 5px; height: 5px; }
-    #list::-webkit-scrollbar-thumb { background: var(--p-accent-dim, #2b4a46); border-radius: 3px; }
-    #list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    #list { flex: 1; }
     .row {
       display: flex; align-items: center; gap: 8px;
       padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--p-card-line, rgba(255,255,255,.05));
@@ -104,7 +94,6 @@
     }
     .row.busy .r-rate { color: var(--p-accent, #42d6c3); font-weight: 700; }
 
-    .foot { flex-shrink: 0; font-size: 9.5px; color: var(--p-muted, #6d7f7c); }
     #msg { flex: 1; display: flex; align-items: center; color: var(--p-sub, #93a8a4); font-size: 13px; }
   </style>
 </head>
@@ -152,7 +141,7 @@
         <span class="spacer"></span>
         <span id="list-note"></span>
       </div>
-      <div id="list"></div>
+      <div id="list" class="scroll-y"></div>
     </div>
 
     <div id="msg" style="display:none">Starting the sampler…</div>

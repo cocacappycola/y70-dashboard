@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="trim">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Now playing</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -29,16 +30,10 @@
       font-size: 11px; color: var(--t-sub, #b3b3b3); white-space: nowrap;
       overflow: hidden; text-overflow: ellipsis; line-height: 1.25;
     }
-    .ctl {
-      background: transparent; border: none; color: var(--t-sub, #b3b3b3); cursor: pointer;
-      width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .ctl:active { color: var(--t-text, #fff); transform: scale(.9); }
-    #play {
-      background: var(--t-accent, #fff); color: var(--t-accent-ink, #000); width: 38px; height: 38px;
-    }
-    #play:active { background: var(--t-accent-dim, #e0e0e0); }
+    /* Transport: the same round icon buttons the full player uses, one size
+       down because this strip is only 60px tall. */
+    .ctl { flex-shrink: 0; }
+    #play { width: 38px; min-width: 38px; min-height: 38px; }
 
     /* Seek strip pinned to the bottom edge */
     #seek { height: 5px; position: relative; cursor: pointer; touch-action: none; flex-shrink: 0; }
@@ -59,11 +54,11 @@
         <div id="title">Nothing playing</div>
         <div id="artist">—</div>
       </div>
-      <button id="prev" class="ctl" aria-label="Previous">
+      <button id="prev" class="btn btn--quiet btn--icon btn--round ctl" aria-label="Previous">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
       </button>
-      <button id="play" class="ctl" aria-label="Play/Pause"></button>
-      <button id="next" class="ctl" aria-label="Next">
+      <button id="play" class="btn btn--primary btn--icon btn--round ctl" aria-label="Play/Pause"></button>
+      <button id="next" class="btn btn--quiet btn--icon btn--round ctl" aria-label="Next">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm10-12v12h2V6h-2z"/></svg>
       </button>
       <span class="times" id="times"></span>

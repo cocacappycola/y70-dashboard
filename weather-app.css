@@ -52,11 +52,8 @@ html, body {
 .aqi-badge b { color: var(--ink); font-size: 14px; }
 .aqi-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
 
-.iconbtn {
-  background: var(--card); border: 1px solid var(--card-line); color: var(--sub);
-  width: 38px; height: 38px; border-radius: 50%; font-size: 16px; cursor: pointer; flex-shrink: 0;
-}
-.iconbtn:active { background: rgba(255,255,255,.14); }
+/* Shape comes from .btn--icon; this only adds the spin while refreshing. */
+.iconbtn { font-size: 16px; }
 .iconbtn.spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -171,11 +168,14 @@ html, body {
   position: absolute; right: 8px; top: 8px; z-index: 5;
   display: flex; flex-direction: column; gap: 5px;
 }
+/* Floating over the map, so these keep their own smoked-glass fill rather
+   than the transparent one every other button uses. */
 #map-zoom button {
-  width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+  width: var(--h-sm); height: var(--h-sm); border-radius: var(--r-sm); cursor: pointer;
   background: rgba(10,16,24,.78); border: 1px solid rgba(255,255,255,.14);
-  color: var(--ink); font-size: 17px; line-height: 1;
+  color: var(--ink); font-size: 17px; line-height: 1; font-family: inherit;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  touch-action: manipulation;
 }
 #map-zoom button:active { background: var(--w-accent-soft, rgba(108,182,255,.3)); }
 #map-legend {
@@ -193,22 +193,11 @@ html, body {
 .overlay-row { display: flex; gap: 8px; margin-top: 11px; flex-wrap: wrap; }
 /* Basemap picker — cycles the tile source, and shows which one is live. */
 .map-base {
-  background: var(--card); border: 1px solid var(--card-line); color: var(--sub);
-  border-radius: 999px; padding: 4px 11px; margin-left: 8px;
+  margin-left: 8px; padding: 0 12px; min-height: 30px;
   font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
-  cursor: pointer; font-family: inherit; white-space: nowrap;
 }
-.map-base:active { background: var(--w-accent-soft, rgba(255,255,255,.14)); color: var(--ink); }
 
-.ov-btn {
-  display: flex; align-items: center; gap: 6px;
-  background: rgba(255,255,255,.05); border: 1px solid var(--card-line);
-  color: var(--sub); border-radius: 999px; padding: 8px 15px;
-  font-size: 12.5px; font-weight: 600; cursor: pointer; min-height: 40px;
-  font-family: inherit;
-}
-.ov-btn:active { background: rgba(255,255,255,.12); }
-.ov-btn.on { background: var(--w-accent-soft, rgba(108,182,255,.17)); border-color: var(--w-accent-line, rgba(108,182,255,.5)); color: var(--w-text, #cfe6ff); }
+.ov-btn { gap: 6px; }
 .ov-ico { font-size: 14px; }
 
 /* ---------- Air quality ---------- */

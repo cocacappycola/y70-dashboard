@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="web">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Web</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -21,35 +22,15 @@
       padding: 6px 8px; background: var(--v-bg-2, #131319);
       border-bottom: 1px solid var(--v-card-line, rgba(255,255,255,.08));
     }
-    .tb {
-      background: var(--v-card, rgba(255,255,255,.06));
-      border: 1px solid var(--v-card-line, rgba(255,255,255,.09));
-      color: var(--v-sub, #a6a6b3); border-radius: 8px;
-      min-width: 38px; height: 38px; padding: 0 9px;
-      font-size: 14px; font-family: inherit; cursor: pointer; flex-shrink: 0;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .tb:active { background: var(--v-surface-2, rgba(255,255,255,.14)); }
-    .tb:disabled { opacity: .3; }
-    .tb.on { background: var(--v-accent, #ff3b5c); border-color: transparent; color: var(--v-accent-ink, #fff); }
+    /* Toolbar buttons are shared .btn--icon; the bar is tight, so they only
+       ask for a little less width. */
+    .tb { flex-shrink: 0; }
     .site {
       font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
       color: var(--v-accent, #ff3b5c); padding: 0 6px; white-space: nowrap;
     }
     .spacer { flex: 1; }
-    #speed {
-      -webkit-appearance: none; appearance: none; width: 70px; height: 38px;
-      background: transparent; flex-shrink: 0; margin: 0;
-    }
-    #speed::-webkit-slider-runnable-track {
-      height: 5px; border-radius: 3px;
-      background: linear-gradient(to right, var(--v-accent, #ff3b5c) var(--fill, 50%), var(--v-surface-2, #2a2a33) var(--fill, 50%));
-    }
-    #speed::-webkit-slider-thumb {
-      -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%;
-      background: var(--v-text, #fff); margin-top: -5px;
-    }
-    #speed:disabled { opacity: .3; }
+    #speed { width: 70px; flex-shrink: 0; }
 
     /* The native view is parked exactly over this box. */
     #slot { flex: 1; min-height: 0; background: #000; position: relative; }
@@ -65,14 +46,14 @@
   <div id="wrap">
     <div id="bar">
       <span class="site" id="site-name">—</span>
-      <button class="tb" id="back" title="Back">‹</button>
-      <button class="tb" id="fwd" title="Forward">›</button>
-      <button class="tb" id="home" title="Home">⌂</button>
-      <button class="tb" id="reload" title="Reload">↻</button>
+      <button class="btn btn--sm btn--icon tb" id="back" title="Back">‹</button>
+      <button class="btn btn--sm btn--icon tb" id="fwd" title="Forward">›</button>
+      <button class="btn btn--sm btn--icon tb" id="home" title="Home">⌂</button>
+      <button class="btn btn--sm btn--icon tb" id="reload" title="Reload">↻</button>
       <span class="spacer"></span>
-      <button class="tb" id="ua" title="Phone or desktop layout">📱</button>
-      <button class="tb" id="auto" title="Auto scroll">▼</button>
-      <input id="speed" type="range" min="1" max="10" value="5" title="Auto-scroll speed" />
+      <button class="btn btn--sm btn--icon tb" id="ua" title="Phone or desktop layout">📱</button>
+      <button class="btn btn--sm btn--icon tb" id="auto" title="Auto scroll">▼</button>
+      <input class="ui-range" id="speed" type="range" min="1" max="10" value="5" title="Auto-scroll speed" />
     </div>
     <div id="slot">
       <div id="msg">
@@ -186,7 +167,7 @@
 
     function setAuto(on) {
       auto = !!on;
-      $("auto").classList.toggle("on", auto);
+      $("auto").classList.toggle("is-on", auto);
       $("auto").textContent = auto ? "⏸" : "▼";
       $("auto").title = auto ? "Stop auto scroll" : "Auto scroll";
       schedule();

@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface="tools">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Timer</title>
   <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -15,58 +16,30 @@
       overflow: hidden; user-select: none;
     }
     #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 14px 8px; gap: 8px; }
-    .head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-    .chip {
-      width: 22px; height: 22px; border-radius: 6px;
-      background: var(--u-accent, #e8d44d); color: var(--u-accent-ink, #000);
-      display: flex; align-items: center; justify-content: center; font-size: 12px;
-    }
-    .label { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--u-sub, #b0aa8e); }
-    .spacer { flex: 1; }
 
     .presets { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
-    .pz {
+
+    /* ---- Running timers ---- */
+    #list { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+    .tm {
+      display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-md);
       background: var(--u-card, rgba(255,255,255,.05));
       border: 1px solid var(--u-card-line, rgba(255,255,255,.1));
-      color: var(--u-text, #fff); border-radius: 9px; padding: 8px 12px;
-      font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; min-height: 38px;
+      position: relative; overflow: hidden; flex-shrink: 0;
     }
-    .pz:active { background: var(--u-surface-2, rgba(255,255,255,.13)); }
-    .pz.stop { border-color: var(--u-accent-line, rgba(232,212,77,.4)); color: var(--u-accent, #e8d44d); }
-
-    #list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; }
-    #list::-webkit-scrollbar { width: 5px; }
-    #list::-webkit-scrollbar-thumb { background: var(--u-accent-dim, #4a4630); border-radius: 3px; }
-    #list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
-
-    .tm {
-      display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px;
-      background: var(--u-card, rgba(255,255,255,.045));
-      border: 1px solid var(--u-card-line, rgba(255,255,255,.08));
-      position: relative; overflow: hidden;
-    }
-    /* Progress runs underneath the row rather than as a separate bar. */
+    /* The remaining time drawn straight into the row. */
     .tm .bg { position: absolute; inset: 0; width: 0%; background: var(--u-accent-soft, rgba(232,212,77,.13)); transition: width .3s linear; }
     .tm > * { position: relative; }
     .tm .t-left { font-size: clamp(18px, 4vh, 30px); font-weight: 200; letter-spacing: -.02em; font-variant-numeric: tabular-nums; min-width: 92px; }
     .tm .t-name { flex: 1; min-width: 0; font-size: 12px; color: var(--u-sub, #b0aa8e); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .tm button {
-      background: transparent; border: 1px solid var(--u-card-line, rgba(255,255,255,.12));
-      color: var(--u-sub, #b0aa8e); border-radius: 7px; width: 32px; height: 30px;
-      font-size: 13px; cursor: pointer; flex-shrink: 0; font-family: inherit;
-    }
-    .tm button:active { background: var(--u-surface-2, rgba(255,255,255,.12)); }
     .tm.paused .t-left { color: var(--u-muted, #7d7960); }
     .tm.done {
-      border-color: var(--u-accent, #e8d44d);
-      animation: ring 1s ease-in-out infinite;
+      background: var(--u-accent-soft, rgba(232,212,77,.16));
+      border-color: var(--u-accent-line, rgba(232,212,77,.45));
     }
     .tm.done .t-left { color: var(--u-accent, #e8d44d); }
-    @keyframes ring { 0%,100% { background: var(--u-card, rgba(255,255,255,.045)); } 50% { background: var(--u-accent-soft, rgba(232,212,77,.22)); } }
 
     #empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--u-muted, #7d7960); font-size: 12.5px; }
-    .foot { flex-shrink: 0; font-size: 9px; color: var(--u-muted, #7d7960); }
-    @media (max-height: 200px) { .foot { display: none; } }
   </style>
 </head>
 <body>
@@ -75,12 +48,12 @@
       <div class="chip">⏱</div>
       <div class="label">Timer</div>
       <div class="spacer"></div>
-      <button class="pz stop" id="silence" style="display:none">Silence</button>
+      <button class="btn btn--chip is-on" id="silence" style="display:none">Silence</button>
     </div>
 
     <div class="presets" id="presets"></div>
 
-    <div id="list"></div>
+    <div id="list" class="scroll-y"></div>
     <div id="empty">No timers running.</div>
 
     <div class="foot">timers keep running with the panel closed · tap ⏸ to hold</div>
@@ -159,7 +132,7 @@
       box.innerHTML = "";
       for (const p of PRESETS) {
         const b = document.createElement("button");
-        b.className = "pz";
+        b.className = "btn btn--chip";
         b.textContent = p.label;
         b.addEventListener("pointerup", () => { beepUnlock(); add(p.s, p.name); });
         box.appendChild(b);
@@ -190,8 +163,8 @@
             '<div class="bg"></div>' +
             '<div class="t-left">0:00</div>' +
             '<div class="t-name"></div>' +
-            '<button class="b-pause">⏸</button>' +
-            '<button class="b-del">✕</button>';
+            '<button class="btn btn--quiet btn--sm btn--icon b-pause">⏸</button>' +
+            '<button class="btn btn--quiet btn--sm btn--icon b-del">✕</button>';
           el.querySelector(".t-name").textContent = t.name;
           el.querySelector(".b-pause").addEventListener("pointerup", () => togglePause(t.id));
           el.querySelector(".b-del").addEventListener("pointerup", () => remove(t.id));

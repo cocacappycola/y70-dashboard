@@ -76,13 +76,13 @@ html, body {
 .tile {
   display: flex; align-items: center; gap: 10px;
   background: var(--panel); color: var(--text); border: 1px solid transparent;
-  border-radius: 12px; padding: 10px 16px 10px 10px; font-size: 14px; font-weight: 600;
+  border-radius: var(--r-md); padding: 10px 16px 10px 10px; font-size: 14px; font-weight: 600;
   cursor: pointer; min-height: 52px;
 }
 .tile:active { background: var(--panel-2); }
 .tile-sub { font-size: 11px; font-weight: 500; color: var(--muted); }
 .tile-ico {
-  width: 32px; height: 32px; border-radius: 8px; font-size: 17px;
+  width: 32px; height: 32px; border-radius: var(--r-sm); font-size: 17px;
   display: flex; align-items: center; justify-content: center;
 }
 /* Drawer icons preview the palette each surface is themed with. */
@@ -98,7 +98,7 @@ html, body {
 .scene-ico   { background: var(--panel-2); color: var(--trim); border: 1px solid var(--trim-line); }
 
 .scene-tile.active .scene-ico { background: var(--trim); color: var(--trim-ink); border-color: transparent; }
-.scene-tile.active { border-color: var(--trim); background: var(--panel-2); }
+.scene-tile.active { border-color: var(--trim-line); background: var(--trim-soft); }
 .scene-actions { display: flex; gap: 8px; margin-top: 10px; }
 .scene-actions button:disabled { opacity: .35; }
 
@@ -110,12 +110,12 @@ html, body {
 #widget-list { display: flex; flex-direction: column; gap: 6px; }
 .wrow {
   display: flex; align-items: center; gap: 10px;
-  background: var(--panel); border: 1px solid transparent; border-radius: 11px;
+  background: var(--panel); border: 1px solid transparent; border-radius: var(--r-md);
   padding: 8px 12px 8px 6px; min-height: 50px; cursor: pointer;
   touch-action: none;                 /* the row is a drag surface */
 }
 .wrow:active { background: var(--panel-2); }
-.wrow.on { border-color: var(--trim); }
+.wrow.on { border-color: var(--trim-line); background: var(--trim-soft); }
 .wrow.dragging {
   opacity: .92; background: var(--panel-2);
   box-shadow: 0 10px 24px rgba(0,0,0,.55); border-color: var(--trim);
@@ -123,7 +123,7 @@ html, body {
 .wgrip {
   width: 34px; height: 38px; flex-shrink: 0; cursor: grab;
   display: flex; align-items: center; justify-content: center;
-  color: var(--muted); font-size: 15px; border-radius: 8px;
+  color: var(--muted); font-size: 15px; border-radius: var(--r-sm);
 }
 .wgrip:active { cursor: grabbing; color: var(--trim); background: var(--panel-2); }
 .wname { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -147,11 +147,9 @@ body.is-native .native-only { display: flex !important; }
 }
 body.keyboard-mode #kb-banner { display: flex; }
 body.keyboard-mode #topbar .grip { opacity: 0; }
-/* A native toggle that is currently on. */
-.set-reset.on { border-color: var(--trim); color: var(--trim); }
 .tile-row.native-only { flex-wrap: wrap; }
 
-.app-tile.active { border-color: var(--trim); background: var(--panel-2); }
+.app-tile.active { border-color: var(--trim-line); background: var(--trim-soft); }
 .wid-tile.on { border-color: var(--trim); }
 .wid-tile.on::after { content: "✓"; color: var(--trim); font-size: 13px; margin-left: 2px; }
 #drawer-close, #settings-close {
@@ -162,24 +160,11 @@ body.keyboard-mode #topbar .grip { opacity: 0; }
 /* ---------- Settings view ---------- */
 .set-head { display: flex; align-items: center; gap: 6px; padding-bottom: 4px; }
 .set-title { font-size: 13px; font-weight: 700; letter-spacing: .04em; }
-.set-back {
-  background: var(--panel); border: none; color: var(--text);
-  width: 36px; height: 36px; border-radius: 10px; font-size: 20px; line-height: 1;
-  cursor: pointer; flex-shrink: 0;
-}
-.set-back:active { background: var(--panel-2); }
-.set-reset {
-  background: transparent; border: 1px solid var(--line); color: var(--sub);
-  border-radius: 999px; padding: 7px 14px; font-size: 12px; font-weight: 600;
-  cursor: pointer; font-family: inherit;
-}
-.set-reset:active { background: var(--panel); }
+.set-back { font-size: 20px; line-height: 1; flex-shrink: 0; }
 .panel-spacer { flex: 1; }
 
 /* The drawer can get taller than the screen on a short display, so scroll it. */
-.set-scroll { max-height: 66vh; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
-.set-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
-.set-scroll::-webkit-scrollbar-thumb { background: var(--trim-dim); border-radius: 3px; }
+.set-scroll { max-height: 66vh; }
 .set-scroll::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 
 .set-label {
@@ -196,11 +181,11 @@ body.keyboard-mode #topbar .grip { opacity: 0; }
 .preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .preset {
   display: flex; flex-direction: column; gap: 7px; align-items: flex-start;
-  background: var(--panel); border: 1px solid transparent; border-radius: 12px;
+  background: var(--panel); border: 1px solid transparent; border-radius: var(--r-md);
   padding: 10px 12px; cursor: pointer; font-family: inherit; min-width: 104px;
 }
 .preset:active { background: var(--panel-2); }
-.preset.on { border-color: var(--trim); }
+.preset.on { border-color: var(--trim-line); background: var(--trim-soft); }
 .preset-name { font-size: 12px; font-weight: 600; color: var(--text); }
 .preset-dots { display: flex; gap: 5px; }
 .preset-dots i {
@@ -211,7 +196,7 @@ body.keyboard-mode #topbar .grip { opacity: 0; }
 /* Swatch rows */
 .swatches { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .sw {
-  width: 38px; height: 38px; border-radius: 10px; cursor: pointer;
+  width: var(--h-sm); height: var(--h-sm); border-radius: var(--r-sm); cursor: pointer;
   border: 2px solid transparent; padding: 0; position: relative;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
 }
@@ -224,7 +209,7 @@ body.keyboard-mode #topbar .grip { opacity: 0; }
 }
 /* Native picker chip — the escape hatch for a colour not in the row. */
 .sw-custom {
-  width: 38px; height: 38px; border-radius: 10px; overflow: hidden; position: relative;
+  width: var(--h-sm); height: var(--h-sm); border-radius: var(--r-sm); overflow: hidden; position: relative;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
   background: conic-gradient(#ff5f56, #ffb03d, #e8d44d, #1ed760, #42d6c3, #5aa9ff, #7c5cff, #a85cd6, #ff5ca8, #ff5f56);
 }
@@ -235,7 +220,7 @@ body.keyboard-mode #topbar .grip { opacity: 0; }
 
 .set-toggle {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  background: var(--panel); border-radius: 12px; padding: 12px 14px;
+  background: var(--panel); border-radius: var(--r-md); padding: 12px 14px;
   margin: 18px 0 6px; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 .set-toggle .set-hint { display: block; margin-top: 2px; }
@@ -291,7 +276,7 @@ body.keyboard-mode #topbar .grip { opacity: 0; }
 .call-top { display: flex; align-items: center; gap: 11px; }
 .call-ico {
   width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
-  background: #3cc86e; color: #04140a;
+  background: var(--ui-live); color: #04140a;
   display: flex; align-items: center; justify-content: center; font-size: 18px;
 }
 /* Only while it is still ringing. */
@@ -300,32 +285,32 @@ body.keyboard-mode #topbar .grip { opacity: 0; }
 .call-who { flex: 1; min-width: 0; }
 #call-from { font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #call-detail { font-size: 11px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#call-timer { font-size: 15px; font-variant-numeric: tabular-nums; color: #7ee2a8; display: none; }
+#call-timer { font-size: 15px; font-variant-numeric: tabular-nums; color: var(--ui-live); display: none; }
 #call-card.active #call-timer { display: block; }
 .call-btns { display: flex; gap: 8px; margin-top: 11px; }
+/* Answer and decline are filled, not outlined: they must be unmistakable in
+   the second you have to read them. The green and red are the shared ones. */
 .call-btn {
-  flex: 1; border: none; border-radius: 12px; padding: 12px 10px;
+  flex: 1; border: none; border-radius: var(--r-md); min-height: var(--h-md); padding: 0 10px;
   font-size: 14px; font-weight: 700; font-family: inherit; cursor: pointer; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: manipulation; transition: transform .06s ease;
 }
-.call-btn.accept { background: #3cc86e; color: #04140a; }
-.call-btn.accept:active { background: #2ea559; }
-.call-btn.decline { background: #e5484d; }
-.call-btn.decline:active { background: #bf3236; }
+.call-btn:active { transform: scale(.97); }
+.call-btn.accept { background: var(--ui-live); color: #04140a; }
+.call-btn.decline { background: var(--ui-danger); color: #2a0107; }
 .call-btn.wide { display: none; }
 /* Once answered it is one button: end the call. */
 #call-card.active .accept, #call-card.active .decline:not(.wide) { display: none; }
 #call-card.active .call-btn.wide { display: block; }
 
-#phone-list { display: flex; flex-direction: column; gap: 6px; max-height: 30vh; overflow-y: auto; }
-#phone-list::-webkit-scrollbar { width: 5px; }
-#phone-list::-webkit-scrollbar-thumb { background: var(--trim-dim); border-radius: 3px; }
-#phone-list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+#phone-list { display: flex; flex-direction: column; gap: 6px; max-height: 30vh; }
 .pn {
   display: flex; gap: 9px; align-items: flex-start;
-  background: var(--panel); border-radius: 11px; padding: 9px 11px;
+  background: var(--panel); border-radius: var(--r-md); padding: 9px 11px;
   border: 1px solid transparent;
 }
-.pn.call { border-color: rgba(229,72,77,.45); }
+.pn.call { border-color: var(--ui-danger-line); }
 .pn .p-ico {
   width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
   background: var(--panel-2); color: var(--sub);
@@ -371,7 +356,7 @@ body.keyboard-mode #topbar .grip { opacity: 0; }
 .panel-spacer { flex: 1; }
 .panel-collapse {
   background: transparent; border: none; color: var(--sub); font-size: 13px;
-  width: 30px; height: 26px; cursor: pointer; border-radius: 6px;
+  width: var(--h-sm); height: 26px; cursor: pointer; border-radius: var(--r-sm);
 }
 .panel-collapse:active { background: var(--panel-2); }
 .panel iframe { width: 100%; border: 0; display: block; flex: 1; min-height: 0; background: var(--t-bg-2, #101014); }
