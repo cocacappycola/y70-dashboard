@@ -11,7 +11,7 @@
 //    /api/pcstats -> live machine telemetry (RAM/CPU/GPU/network/top talkers)
 //    /api/system  -> audio devices + per-app mixer + Windows media session
 //    /api/lyrics  -> LRCLIB proxy (free, key-less), cached
-//    /api/notes   -> reads/writes notes.txt beside this file
+//    /api/notes   -> reads/writes notes.txt in the data folder
 //    /api/discord -> Discord RPC: real mute/deafen, voice channel, speaking
 //    /api/phone   -> iPhone notifications, calls and battery over BLE (ANCS)
 //    everything else -> static files from this folder
@@ -28,11 +28,36 @@ const https = require("https");
 const discord = require("./discord");
 
 const HOST = "127.0.0.1";
-const PORT = 8888;
+// The shell and every page assume 8888; the override exists so a second copy
+// can be run alongside a live one to try something out.
+const PORT = Number(process.env.Y70_PORT) || 8888;
 const ROOT = __dirname;
 
+// Everything the dashboard WRITES lives apart from the files it ships. Once
+// installed, ROOT is inside Program Files and read-only, so saving notes or
+// Discord credentials came back EPERM. The native shell passes its per-user
+// folder in; run from source there is no shell, and beside the code is
+// exactly where these belong.
+const DATA = process.env.Y70_DATA || ROOT;
+try { fs.mkdirSync(DATA, { recursive: true }); } catch (e) {}
+
+// State written before that split may still be sitting beside the code. Carry
+// it across once rather than silently starting the user over.
+const STATE_FILES = ["claude-key.txt", "notes.txt", "discord-app.json", "discord-token.json"];
+function stateFile(name) {
+  const target = path.join(DATA, name);
+  if (DATA !== ROOT && !fs.existsSync(target)) {
+    try {
+      const legacy = path.join(ROOT, name);
+      if (fs.existsSync(legacy)) fs.copyFileSync(legacy, target);
+    } catch (e) { /* nothing to carry over */ }
+  }
+  return target;
+}
+for (const name of STATE_FILES) stateFile(name);
+
 const CLAUDE_MODEL = "claude-opus-5";
-const CLAUDE_KEY_FILE = path.join(ROOT, "claude-key.txt");
+const CLAUDE_KEY_FILE = stateFile("claude-key.txt");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -702,7 +727,7 @@ function parseLrc(lrc) {
 //  Kept as a plain file rather than in the browser so it survives clearing site
 //  data, and so the same text can be opened in an editor.
 // ============================================================================
-const NOTES_FILE = path.join(ROOT, "notes.txt");
+const NOTES_FILE = stateFile("notes.txt");
 
 function handleNotes(req, res) {
   if (req.method === "GET") {
@@ -942,16 +967,10 @@ const server = http.createServer((req, res) => {
     return res.end("Forbidden");
   }
   // Never serve secrets or local stores as static content. discord-app.json
-  // holds a client SECRET and discord-token.json an access token.
-  if (filePath === discord.APP_FILE() || filePath === discord.TOKEN_FILE()) {
-    res.writeHead(403);
-    return res.end("Forbidden");
-  }
-  if (filePath === NOTES_FILE) {
-    res.writeHead(403);
-    return res.end("Forbidden");
-  }
-  if (filePath === CLAUDE_KEY_FILE) {
+  // holds a client SECRET and discord-token.json an access token. Matched by
+  // name, not by path, so a stale copy left beside the code stays unreachable
+  // too now that the live ones have moved to the data folder.
+  if (STATE_FILES.includes(path.basename(filePath))) {
     res.writeHead(403);
     return res.end("Forbidden");
   }
@@ -977,14 +996,14 @@ server.on("error", (err) => {
   throw err;
 });
 
-discord.init(ROOT);
+discord.init(DATA);
 
 server.listen(PORT, HOST, () => {
   console.log("");
   console.log("  Y70 Dashboard is running.");
   console.log("  ->  http://" + HOST + ":" + PORT);
   console.log("");
-  console.log("  Claude widget: " + (readClaudeKey() ? "API key found." : "no key yet — paste one into claude-key.txt"));
+  console.log("  Claude widget: " + (readClaudeKey() ? "API key found." : "no key yet — paste one into " + CLAUDE_KEY_FILE));
   console.log("  Press Ctrl+C to stop.");
   console.log("");
 });

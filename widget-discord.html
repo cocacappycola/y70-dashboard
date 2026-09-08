@@ -255,8 +255,8 @@
           '<div id="form-msg"></div>' +
           '<div class="err" style="margin-top:12px">You must be the application’s <b>owner</b> — that is what ' +
           "lets it use the <code>rpc</code> scopes without Discord whitelisting it, and why this only works for " +
-          "your own account.<br>The secret is written to <code>discord-app.json</code> next to the dashboard, " +
-          "which the web server refuses to serve. It never leaves this machine.</div>";
+          "your own account.<br>The secret is written to <code>discord-app.json</code> in the dashboard’s own " +
+          "data folder, which the web server refuses to serve. It never leaves this machine.</div>";
         wireForm();
         return;
       }

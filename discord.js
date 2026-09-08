@@ -37,9 +37,11 @@ const SCOPES = ["rpc", "rpc.voice.read", "rpc.voice.write", "identify"];
 // and match what the token exchange sends.
 const REDIRECT_URI = "http://localhost";
 
-let ROOT = __dirname;
-const appFile = () => path.join(ROOT, "discord-app.json");
-const tokenFile = () => path.join(ROOT, "discord-token.json");
+// Where the credentials are kept. The server hands over its writable data
+// folder, which is not the folder this code was installed into.
+let DATA = __dirname;
+const appFile = () => path.join(DATA, "discord-app.json");
+const tokenFile = () => path.join(DATA, "discord-token.json");
 
 const dc = {
   clientId: "", clientSecret: "",
@@ -437,8 +439,8 @@ async function action(name, args) {
   }
 }
 
-function init(root) {
-  ROOT = root || ROOT;
+function init(dataDir) {
+  DATA = dataDir || DATA;
   loadConfig();
   if (dc.clientId) connect();
 }

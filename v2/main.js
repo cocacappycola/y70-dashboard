@@ -86,8 +86,10 @@ async function ensureServer() {
     cwd: ROOT,
     windowsHide: true,
     // ELECTRON_RUN_AS_NODE makes the bundled Electron binary behave as plain
-    // node, so there is no separate Node install to depend on.
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    // node, so there is no separate Node install to depend on. Y70_DATA is
+    // where notes and credentials go: installed, ROOT is under Program Files
+    // and nothing may be written there.
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", Y70_DATA: app.getPath("userData") },
     stdio: "ignore",
   });
   serverProc.on("exit", () => { serverProc = null; });
