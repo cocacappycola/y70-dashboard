@@ -23,6 +23,7 @@ const WIDGETS = {
   notes: { title: "Notes", src: "/widget-notes.html", ico: "tools-ico", glyph: "✎" },
   discord: { title: "Discord", src: "/widget-discord.html", ico: "discord-ico", glyph: "◉" },
   face: { title: "Camera", src: "/widget-face.html", ico: "web-ico", glyph: "☺" },
+  pin: { title: "Pinned window", src: "/widget-pin.html", ico: "web-ico", glyph: "⤱" },
 };
 
 // ---- Scenes ----------------------------------------------------------------
@@ -167,6 +168,9 @@ function renderDock() {
       toggleCollapse(name);
     });
   }
+  // Switching the widget off takes its iframe away mid-sentence; without this
+  // a borrowed window would be left hanging over the panel.
+  if (native && native.pinPlace && !pinFrame()) native.pinPlace({ visible: false });
   renderWidgetList();
 }
 
@@ -848,6 +852,37 @@ async function handleWebMessage(source, d) {
   return reply(await native.webAction(d.site, d.action, d.arg));
 }
 
+// ---- Pinned window ---------------------------------------------------------
+// The widget says where its slot is; only the shell knows where that iframe
+// sits in the window, and only the main process knows where the window sits on
+// the desktop.
+const pinFrame = () => document.querySelector('#dock iframe[src="/widget-pin.html"]');
+
+async function handlePinMessage(source, d) {
+  const reply = (result) => {
+    try { source.postMessage({ type: "y70:pin-reply", id: d.id, result }, "*"); } catch (e) {}
+  };
+  if (!native || !native.pinList) return reply({ ok: false, error: "not the native shell" });
+
+  if (d.action === "place") {
+    // The drawer is HTML and a real window would sit on top of it, so the
+    // borrowed window steps aside whenever the drawer is down.
+    const covered = drawer.classList.contains("open") || !backdrop.classList.contains("hidden");
+    const frame = pinFrame();
+    if (covered || !d.visible || !frame) return reply(await native.pinPlace({ visible: false }));
+    const fr = frame.getBoundingClientRect();
+    return reply(await native.pinPlace({
+      visible: true,
+      rect: { x: fr.left + d.rect.x, y: fr.top + d.rect.y, width: d.rect.width, height: d.rect.height },
+    }));
+  }
+  if (d.action === "list") return reply(await native.pinList());
+  if (d.action === "state") return reply(await native.pinState());
+  if (d.action === "set") return reply(await native.pinSet(d.hwnd, d.title, d.process));
+  if (d.action === "clear") return reply(await native.pinClear());
+  return reply({ ok: false, error: "unknown action" });
+}
+
 // Switching apps or opening the drawer must take the native view down with it,
 // otherwise it hangs over whatever is now on top.
 function syncWebViews() {
@@ -898,6 +933,9 @@ window.addEventListener("message", (e) => {
   // rectangles in its own coordinates; the offset of its iframe within the
   // window is added here, because only the shell knows that.
   if (d.type === "y70:web") { handleWebMessage(e.source, d); return; }
+
+  // The pinned-window widget, which borrows a real window from Windows.
+  if (d.type === "y70:pin") { handlePinMessage(e.source, d); return; }
 
   // Spotify sign-in. In a browser this is just a top-level navigation; in the
   // native panel it has to be a separate focusable window, because this one

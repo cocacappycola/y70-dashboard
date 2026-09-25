@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en" data-surface="web">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pinned window</title>
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--v-grad, #2a1420) 0%, var(--v-bg, #101014) 60%);
+      color: var(--v-text, #f6eef1);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 8px 12px 6px; gap: 6px; }
+
+    /* The borrowed window is a real Windows window sitting on top of this
+       page, so the header has to stay out from under it — that strip is the
+       only part of the widget still reachable once something is pinned. */
+    .head { flex-shrink: 0; }
+
+    #slot { flex: 1; min-height: 0; position: relative; }
+
+    #picker { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 5px; }
+    #list { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+    .r-proc { font-size: 10px; color: var(--v-muted, #8d7b81); flex-shrink: 0; }
+
+    #holding {
+      position: absolute; inset: 0; display: none;
+      flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+      border: 1px dashed var(--v-card-line, rgba(255,255,255,.14));
+      border-radius: var(--r-md); text-align: center; padding: 16px;
+      color: var(--v-muted, #8d7b81); font-size: 12px; line-height: 1.5;
+    }
+    #holding.show { display: flex; }
+    #holding b { color: var(--v-text, #fff); font-size: 13px; }
+
+    #msg { font-size: 12px; color: var(--v-sub, #c9b6bd); padding: 10px 2px; line-height: 1.5; }
+    .err { color: var(--ui-danger); font-size: 11.5px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">⇱</div>
+      <div class="label">Pinned</div>
+      <div class="spacer"></div>
+      <div class="note" id="who"></div>
+      <button class="btn btn--ghost btn--sm" id="refresh" style="display:none">Refresh</button>
+      <button class="btn btn--ghost btn--sm" id="unpin" style="display:none">Unpin</button>
+    </div>
+
+    <div id="slot">
+      <div id="picker">
+        <div id="msg">Looking for windows…</div>
+        <div id="list" class="scroll-y"></div>
+      </div>
+      <div id="holding">
+        <b id="held-name">—</b>
+        <div>It is being held over this slot. Drag the bar above to resize it,
+        or tap Unpin to put it back where it was.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+
+    let seq = 0;
+    const waiting = new Map();
+    function ask(action, payload) {
+      return new Promise((resolve) => {
+        const id = ++seq;
+        waiting.set(id, resolve);
+        setTimeout(() => { if (waiting.delete(id)) resolve(null); }, 6000);
+        try { window.parent.postMessage({ type: "y70:pin", id, action, ...payload }, "*"); }
+        catch (e) { waiting.delete(id); resolve(null); }
+      });
+    }
+    window.addEventListener("message", (e) => {
+      const d = e.data;
+      if (!d || d.type !== "y70:pin-reply") return;
+      const fn = waiting.get(d.id);
+      if (fn) { waiting.delete(d.id); fn(d.result); }
+    });
+
+    let pinned = null;         // { hwnd, title, process }
+    let native = true;
+
+    // ---- placing -------------------------------------------------------------
+    // Same idea as the web apps: report where the slot is and let the shell add
+    // its own offset, because an iframe has no idea where it sits on screen.
+    let lastSig = "";
+    function place(force) {
+      if (!pinned) {
+        if (lastSig !== "off") { lastSig = "off"; ask("place", { visible: false }); }
+        return;
+      }
+      const r = $("slot").getBoundingClientRect();
+      const rect = { x: r.left, y: r.top, width: r.width, height: r.height };
+      const sig = [rect.x, rect.y, rect.width, rect.height, document.hidden].join(",");
+      if (!force && sig === lastSig) return;
+      lastSig = sig;
+      ask("place", { rect, visible: !document.hidden });
+    }
+    setInterval(() => place(false), 500);
+    addEventListener("resize", () => place(true));
+    document.addEventListener("visibilitychange", () => place(true));
+    // Leaving without a word would strand the window on top of the panel.
+    addEventListener("pagehide", () => { try { window.parent.postMessage({ type: "y70:pin", id: ++seq, action: "place", visible: false }, "*"); } catch (e) {} });
+
+    // ---- painting ------------------------------------------------------------
+    function paint() {
+      const on = !!(pinned && pinned.hwnd);
+      $("holding").classList.toggle("show", on);
+      $("picker").style.display = on ? "none" : "flex";
+      $("unpin").style.display = on ? "" : "none";
+      $("refresh").style.display = on || !native ? "none" : "";
+      $("who").textContent = on ? (pinned.process || "") : "";
+      $("held-name").textContent = on ? (pinned.title || "that window") : "—";
+    }
+
+    function shorten(s) {
+      s = String(s || "");
+      return s.length > 54 ? s.slice(0, 53) + "…" : s;
+    }
+
+    async function refresh() {
+      $("msg").textContent = "Looking for windows…";
+      $("msg").className = "";
+      const list = await ask("list", {});
+      if (!Array.isArray(list)) return noShell();
+      native = true;
+      $("list").innerHTML = "";
+      if (!list.length) {
+        $("msg").textContent = "No windows to borrow. Open Snapchat, Discord or anything else with a window and tap Refresh.";
+        paint();
+        return;
+      }
+      $("msg").textContent = "Tap a window to hold it on this panel.";
+      for (const w of list) {
+        const b = document.createElement("button");
+        b.className = "row-btn";
+        b.innerHTML = '<span class="r-name"></span><span class="r-proc"></span>';
+        b.querySelector(".r-name").textContent = shorten(w.title);
+        b.querySelector(".r-proc").textContent = w.process || "";
+        b.addEventListener("pointerup", async () => {
+          const st = await ask("set", { hwnd: w.hwnd, title: w.title, process: w.process });
+          if (st && st.hwnd) { pinned = st; lastSig = ""; paint(); place(true); }
+          else {
+            $("msg").className = "err";
+            $("msg").textContent = (st && st.error) || "Could not hold that window.";
+          }
+        });
+        $("list").appendChild(b);
+      }
+      paint();
+    }
+
+    $("refresh").addEventListener("pointerup", refresh);
+    $("unpin").addEventListener("pointerup", async () => {
+      await ask("clear", {});
+      pinned = null;
+      lastSig = "";
+      paint();
+      refresh();
+    });
+
+    function noShell() {
+      native = false;
+      $("msg").innerHTML = "<b>This widget needs the desktop shell</b><br>" +
+        "Borrowing a window from Windows is something only the V2 app can do. " +
+        "Run <b>launch-v2.bat</b> and open the dashboard there.";
+      $("list").innerHTML = "";
+      paint();
+    }
+
+    (async () => {
+      const st = await ask("state", {});
+      // A null here means nothing answered at all — no shell to relay to.
+      if (st === null) return noShell();
+      if (st && st.hwnd) { pinned = st; paint(); place(true); }
+      else { paint(); refresh(); }
+    })();
+  </script>
+</body>
+</html>

@@ -52,6 +52,15 @@ contextBridge.exposeInMainWorld("y70native", {
   keyboardTouch: () => ipcRenderer.invoke("y70:keyboard-touch"),
   focusReport: () => ipcRenderer.invoke("y70:focus-report"),
 
+  // Parks another program's window on the panel (a Snapchat or Discord call)
+  // and holds it in the slot the widget reports.
+  pinList: () => ipcRenderer.invoke("y70:pin-list"),
+  pinState: () => ipcRenderer.invoke("y70:pin-state"),
+  pinSet: (hwnd, title, proc) => ipcRenderer.invoke("y70:pin-set", hwnd, title, proc),
+  pinClear: () => ipcRenderer.invoke("y70:pin-clear"),
+  pinPlace: (opts) => ipcRenderer.invoke("y70:pin-place", opts),
+  onPin: (fn) => { ipcRenderer.on("y70:pin", (_e, s) => fn(s)); },
+
   reload: () => ipcRenderer.invoke("y70:reload"),
   quit: () => ipcRenderer.invoke("y70:quit"),
   displays: () => ipcRenderer.invoke("y70:displays"),

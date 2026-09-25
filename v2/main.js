@@ -19,6 +19,7 @@ const { app, BrowserWindow, WebContentsView, screen, ipcMain, Tray, Menu,
         nativeImage, shell, session } = require("electron");
 const path = require("path");
 const net = require("net");
+const fs = require("fs");
 const { spawn } = require("child_process");
 const { autoUpdater } = require("electron-updater");
 
@@ -468,6 +469,157 @@ function webState(site) {
   };
 }
 
+// ------------------------------------------------------------------ pin ----
+//  Parks another program's window on the panel and holds it there: Snapchat's
+//  call window, a Discord call, anything that has a window of its own. The
+//  Win32 work happens in winpin.ps1; this decides where the window goes.
+//
+//  Every move it makes is SWP_NOACTIVATE. Moving a window the ordinary way
+//  activates it, which is exactly the focus theft this whole panel exists to
+//  avoid.
+const WINPIN_SCRIPT = path.join(ROOT, "winpin.ps1");
+const HOLD_MS = 1500;
+
+const pin = {
+  proc: null, buf: "", error: null,
+  hwnd: null, title: "", process: "",
+  rect: null,                 // where the widget wants it, in screen pixels
+  shown: false,
+  listWaiters: [],
+};
+
+function pinSend(obj) {
+  if (!pin.proc) return false;
+  try { pin.proc.stdin.write(JSON.stringify(obj) + "\n"); return true; }
+  catch (e) { return false; }
+}
+
+function pinStart() {
+  if (pin.proc) return true;
+  if (process.platform !== "win32") { pin.error = "Windows only."; return false; }
+  if (!fs.existsSync(WINPIN_SCRIPT)) { pin.error = "winpin.ps1 is missing."; return false; }
+  pin.error = null;
+  const child = spawn("powershell.exe", [
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", WINPIN_SCRIPT,
+    "-ParentPid", String(process.pid),
+  ], { cwd: ROOT, windowsHide: true });
+  pin.proc = child;
+
+  child.stdout.on("data", (d) => {
+    pin.buf += d.toString();
+    let i;
+    while ((i = pin.buf.indexOf("\n")) >= 0) {
+      const line = pin.buf.slice(0, i).trim();
+      pin.buf = pin.buf.slice(i + 1);
+      if (!line) continue;
+      try { onPinMessage(JSON.parse(line)); } catch (e) { /* partial or noise */ }
+    }
+    if (pin.buf.length > 1e6) pin.buf = "";
+  });
+  child.stderr.on("data", (d) => { pin.error = String(d).slice(0, 300).trim() || pin.error; });
+  child.on("error", (e) => { pin.error = e.message; pin.proc = null; });
+  child.on("exit", () => { pin.proc = null; pin.buf = ""; });
+  return true;
+}
+
+function onPinMessage(m) {
+  switch (m.type) {
+    case "list": {
+      const ws = Array.isArray(m.windows) ? m.windows : [];
+      for (const fn of pin.listWaiters.splice(0)) fn(ws);
+      break;
+    }
+    case "pinned":
+      if (m.ok) { pin.title = m.title || ""; pin.error = null; }
+      else { pin.hwnd = null; pin.error = m.error || "could not pin that window"; }
+      pinReport();
+      break;
+    case "gone":
+      // The program was closed while pinned. Forget it rather than going on
+      // shoving a handle that no longer belongs to anything.
+      if (pin.hwnd === m.hwnd) { pin.hwnd = null; pin.title = ""; pinReport(); }
+      break;
+    case "error": pin.error = m.error; pinReport(); break;
+    default: break;
+  }
+}
+
+function pinState() {
+  return {
+    running: !!pin.proc,
+    hwnd: pin.hwnd,
+    title: pin.title,
+    process: pin.process,
+    error: pin.error,
+  };
+}
+function pinReport() {
+  if (win && !win.isDestroyed()) win.webContents.send("y70:pin", pinState());
+}
+
+function pinList() {
+  if (!pinStart()) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    const done = (ws) => resolve(ws);
+    pin.listWaiters.push(done);
+    if (!pinSend({ cmd: "list" })) { pin.listWaiters = pin.listWaiters.filter((f) => f !== done); resolve([]); }
+    setTimeout(() => {
+      if (pin.listWaiters.includes(done)) {
+        pin.listWaiters = pin.listWaiters.filter((f) => f !== done);
+        resolve([]);
+      }
+    }, 5000);
+  });
+}
+
+function pinSet(hwnd, title, proc) {
+  if (!pinStart()) return pinState();
+  if (pin.hwnd && pin.hwnd !== hwnd) pinSend({ cmd: "unpin", hwnd: pin.hwnd });
+  pin.hwnd = String(hwnd);
+  pin.title = title || "";
+  pin.process = proc || "";
+  pin.shown = false;
+  pinSend({ cmd: "pin", hwnd: pin.hwnd });
+  return pinState();
+}
+
+function pinClear() {
+  if (pin.hwnd) pinSend({ cmd: "unpin", hwnd: pin.hwnd });
+  pin.hwnd = null; pin.title = ""; pin.process = ""; pin.rect = null; pin.shown = false;
+  pinReport();
+  return pinState();
+}
+
+// The widget reports where its slot is, in the window's own coordinates; only
+// this side knows where the window itself is on the desktop.
+function pinPlace(opts) {
+  if (!pin.hwnd) return { ok: false };
+  const visible = !!(opts && opts.visible) && !!(opts && opts.rect);
+  if (!visible) {
+    if (pin.shown) { pinSend({ cmd: "hide", hwnd: pin.hwnd }); pin.shown = false; }
+    return { ok: true, visible: false };
+  }
+  const b = win.getBounds();
+  const r = opts.rect;
+  const scr = screen.dipToScreenRect(win, {
+    x: Math.round(b.x + r.x), y: Math.round(b.y + r.y),
+    width: Math.max(80, Math.round(r.width)), height: Math.max(60, Math.round(r.height)),
+  });
+  pin.rect = scr;
+  if (!pin.shown) { pinSend({ cmd: "show", hwnd: pin.hwnd }); pin.shown = true; }
+  pinSend({ cmd: "move", hwnd: pin.hwnd, x: scr.x, y: scr.y, w: scr.width, h: scr.height, topmost: true });
+  return { ok: true, visible: true };
+}
+
+// Windows lets anything move a window, including the program that owns it, so
+// keep putting it back.
+setInterval(() => {
+  if (pin.hwnd && pin.rect && pin.shown) {
+    pinSend({ cmd: "move", hwnd: pin.hwnd, x: pin.rect.x, y: pin.rect.y,
+              w: pin.rect.width, h: pin.rect.height, topmost: true });
+  }
+}, HOLD_MS).unref();
+
 // ---------------------------------------------------------------- update ----
 // Reads GitHub Releases. The repo is public, so no token is needed anywhere and
 // nothing sensitive ships in the installer.
@@ -624,6 +776,11 @@ function getAppVersion() {
   return appVersion;
 }
 ipcMain.handle("y70:version", () => getAppVersion());
+ipcMain.handle("y70:pin-list", () => pinList());
+ipcMain.handle("y70:pin-state", () => pinState());
+ipcMain.handle("y70:pin-set", (_e, hwnd, title, proc) => pinSet(String(hwnd), title, proc));
+ipcMain.handle("y70:pin-clear", () => pinClear());
+ipcMain.handle("y70:pin-place", (_e, opts) => pinPlace(opts || {}));
 ipcMain.handle("y70:displays", () => screen.getAllDisplays().map((d, i) => ({
   index: i, bounds: d.bounds, primary: d.id === screen.getPrimaryDisplay().id,
 })));
@@ -662,6 +819,10 @@ const reposition = () => placeOnPanel();
 
 app.on("window-all-closed", () => app.quit());
 app.on("before-quit", () => {
+  // Give back any window we borrowed before letting go of the helper, or it
+  // would be left hidden or stranded on the panel.
+  try { if (pin.hwnd) pinSend({ cmd: "unpin", hwnd: pin.hwnd }); } catch (e) {}
+  try { if (pin.proc) setTimeout(() => { try { pin.proc.kill(); } catch (e) {} }, 300); } catch (e) {}
   // Only stop the server if we were the ones who started it.
   if (serverProc) { try { serverProc.kill(); } catch (e) {} }
 });
