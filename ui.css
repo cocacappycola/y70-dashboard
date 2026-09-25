@@ -14,6 +14,10 @@
    theme.js never runs.
    ============================================================================ */
 
+/* A control's own `display` beats the browser's `[hidden] { display: none }`,
+   so hiding a .btn with el.hidden quietly did nothing. Settle it once. */
+[hidden] { display: none !important; }
+
 :root {
   /* Shape. Three radii and three heights, and nothing in between — the mix of
      8/9/10/11/12px that grew up across the widgets is what made them read as

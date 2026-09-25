@@ -8,6 +8,7 @@ const APPS = {
   youtube: { title: "YouTube", src: "/app-web.html?site=youtube" },
   shorts: { title: "Shorts", src: "/app-web.html?site=shorts" },
   tiktok: { title: "TikTok", src: "/app-web.html?site=tiktok" },
+  snapchat: { title: "Snapchat", src: "/app-web.html?site=snapchat" },
 };
 
 const WIDGETS = {
@@ -21,6 +22,7 @@ const WIDGETS = {
   timer: { title: "Timer", src: "/widget-timer.html", ico: "tools-ico", glyph: "⏱" },
   notes: { title: "Notes", src: "/widget-notes.html", ico: "tools-ico", glyph: "✎" },
   discord: { title: "Discord", src: "/widget-discord.html", ico: "discord-ico", glyph: "◉" },
+  face: { title: "Camera", src: "/widget-face.html", ico: "web-ico", glyph: "☺" },
 };
 
 // ---- Scenes ----------------------------------------------------------------
@@ -798,6 +800,11 @@ function setKeyboardIndicator(on) {
   document.body.classList.toggle("keyboard-mode", keyboardMode);
   const t = $("#kb-toggle");
   if (t) t.textContent = keyboardMode ? "Keyboard mode: ON" : "Keyboard mode: off";
+  // The web apps draw their own keyboard button, and the mode releases itself
+  // after a minute, so they have to hear about it rather than remember.
+  document.querySelectorAll("iframe").forEach((f) => {
+    try { f.contentWindow.postMessage({ type: "y70:keyboard-state", on: keyboardMode }, "*"); } catch (e) {}
+  });
 }
 
 // A widget that needs typing (Notes) asks through the shell, since preload is
@@ -846,7 +853,7 @@ async function handleWebMessage(source, d) {
 function syncWebViews() {
   if (!native) return;
   const covered = drawer.classList.contains("open") || !backdrop.classList.contains("hidden");
-  const activeIsWeb = /^(youtube|shorts|tiktok)$/.test(state.app);
+  const activeIsWeb = /^(youtube|shorts|tiktok|snapchat)$/.test(state.app);
   if (covered || !activeIsWeb) native.webHideAll();
   // When it should be visible the app page re-places it on its own next tick.
 }
@@ -900,6 +907,8 @@ window.addEventListener("message", (e) => {
     else window.location = d.url;
     return;
   }
+
+  if (d.type === "y70:open-app" && APPS[d.app]) { setApp(d.app); return; }
 
   if (d.type === "y70:cmd") {
     const sp = document.getElementById("app-spotify");

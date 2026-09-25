@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en" data-surface="web">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Camera</title>
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/ui.css" />
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; height: 100%;
+      background: linear-gradient(160deg, var(--v-grad, #2a1420) 0%, var(--v-bg, #101014) 60%);
+      color: var(--v-text, #f6eef1);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden; user-select: none;
+    }
+    #wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 14px 8px; gap: 8px; }
+
+    /* The picture. object-fit: cover because the cameras here are not all the
+       same shape — the webcam is 4:3 and the OBS feed is portrait. */
+    #stage {
+      flex: 1; min-height: 0; position: relative; border-radius: var(--r-md);
+      overflow: hidden; background: #000;
+      border: 1px solid var(--v-card-line, rgba(255,255,255,.1));
+    }
+    #cam {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+      background: #000; transition: opacity .18s ease;
+    }
+    /* A webcam fills the panel; a portrait source (an OBS canvas, say) would
+       be cropped down to a sliver by that, so it is shown whole instead. */
+    #cam.fit { object-fit: contain; }
+    #cam.mirror { transform: scaleX(-1); }
+    #cam.off { opacity: 0; }
+
+    /* Controls float over the picture so the face gets the whole panel. */
+    .controls {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+      background: linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0));
+    }
+    .controls .btn--quiet { color: #fff; }
+    .controls .btn--quiet:active { background: rgba(255,255,255,.18); }
+
+    /* Anything that is not a live picture: starting, blocked, busy. */
+    #state {
+      position: absolute; inset: 0; display: none;
+      flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; padding: 20px; text-align: center;
+      color: var(--v-sub, #c9b6bd); font-size: 13px; line-height: 1.5;
+    }
+    #state.show { display: flex; }
+    #state b { color: var(--v-text, #fff); font-size: 14px; }
+    #state .why { font-size: 11.5px; color: var(--v-muted, #8d7b81); max-width: 380px; }
+
+    .dots { display: flex; gap: 5px; }
+    .dots i {
+      width: 6px; height: 6px; border-radius: 50%; background: var(--v-accent, #ff3b5c);
+      animation: pulse 1.1s ease-in-out infinite;
+    }
+    .dots i:nth-child(2) { animation-delay: .15s; }
+    .dots i:nth-child(3) { animation-delay: .3s; }
+    @keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+    @media (max-height: 200px) { .head, .foot { display: none; } #wrap { padding: 6px 8px; } }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="head">
+      <div class="chip">☺</div>
+      <div class="label">Camera</div>
+      <div class="spacer"></div>
+      <div class="note" id="who"></div>
+    </div>
+
+    <div id="stage">
+      <video id="cam" class="mirror off" autoplay playsinline muted></video>
+
+      <div id="state" class="show">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <b>Starting the camera…</b>
+      </div>
+
+      <div class="controls" id="controls">
+        <button class="btn btn--quiet btn--icon btn--round" id="hold" title="Release the camera">⏸</button>
+        <button class="btn btn--quiet btn--icon btn--round" id="mirror" title="Mirror">⇄</button>
+        <button class="btn btn--quiet btn--icon btn--round" id="swap" title="Next camera">🎥</button>
+        <span class="spacer"></span>
+        <button class="btn btn--primary btn--sm" id="snap">Snapchat</button>
+      </div>
+    </div>
+
+    <div class="foot" id="foot">the camera is let go the moment this panel is closed</div>
+  </div>
+
+  <script>
+    const $ = (s) => document.getElementById(s);
+    const KEY_DEV = "y70_face_device";
+    const KEY_MIRROR = "y70_face_mirror";
+
+    let stream = null;
+    let devices = [];
+    let wanted = localStorage.getItem(KEY_DEV) || "";
+    let held = false;                      // deliberately let go of, by the ⏸ button
+    let starting = false;
+    let retry = null;
+
+    const mirrored = () => localStorage.getItem(KEY_MIRROR) !== "0";
+
+    function show(title, why, spinner) {
+      $("state").classList.add("show");
+      $("cam").classList.add("off");
+      $("state").innerHTML = "";
+      if (spinner) {
+        const d = document.createElement("div");
+        d.className = "dots";
+        d.innerHTML = "<i></i><i></i><i></i>";
+        $("state").appendChild(d);
+      }
+      const b = document.createElement("b");
+      b.textContent = title;
+      $("state").appendChild(b);
+      if (why) {
+        const p = document.createElement("div");
+        p.className = "why";
+        p.textContent = why;
+        $("state").appendChild(p);
+      }
+    }
+    function showLive() {
+      $("state").classList.remove("show");
+      $("cam").classList.remove("off");
+    }
+
+    // ---- the stream ---------------------------------------------------------
+    function release() {
+      if (retry) { clearTimeout(retry); retry = null; }
+      if (!stream) return;
+      stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+      $("cam").srcObject = null;
+      $("cam").classList.add("off");
+    }
+
+    async function listCameras() {
+      try {
+        const all = await navigator.mediaDevices.enumerateDevices();
+        devices = all.filter((d) => d.kind === "videoinput");
+      } catch (e) { devices = []; }
+      return devices;
+    }
+
+    async function start() {
+      if (starting || held || document.hidden) return;
+      starting = true;
+      if (retry) { clearTimeout(retry); retry = null; }
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          return show("No camera API here", "This page has to be served over http://127.0.0.1 for the browser to allow it.");
+        }
+        show("Starting the camera…", "", true);
+
+        await listCameras();
+        // Labels are blank until a camera has been opened once, so the saved
+        // choice can only be matched on the second run onwards.
+        const pick = devices.find((d) => d.label && d.label === wanted);
+        const constraints = pick
+          ? { video: { deviceId: { exact: pick.deviceId } }, audio: false }
+          : { video: true, audio: false };
+
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        $("cam").srcObject = stream;
+        await $("cam").play().catch(() => {});
+
+        // play() usually resolves after loadedmetadata, so measure now and
+        // listen as well in case the dimensions are not in yet.
+        $("cam").addEventListener("loadedmetadata", fitVideo, { once: true });
+        fitVideo();
+        const track = stream.getVideoTracks()[0];
+        const st = track.getSettings ? track.getSettings() : {};
+        wanted = track.label || wanted;
+        try { localStorage.setItem(KEY_DEV, wanted); } catch (e) {}
+        await listCameras();                       // labels are readable now
+        $("who").textContent = shortName(track.label) + (st.width ? "  ·  " + st.width + "×" + st.height : "");
+        $("foot").textContent = "the camera is let go the moment this panel is closed";
+        showLive();
+      } catch (e) {
+        release();
+        explain(e);
+      } finally {
+        starting = false;
+      }
+    }
+
+    // The three failures that actually happen, each with the thing to do next.
+    function explain(e) {
+      const name = e && e.name || "";
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        show("Camera blocked", "Windows or the browser refused access. Check Settings › Privacy › Camera.");
+      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+        show("No camera found", devices.length
+          ? "The one this widget remembers is gone. Tap 🎥 to pick another."
+          : "Nothing is plugged in that Windows recognises as a camera.");
+      } else if (name === "NotReadableError" || name === "AbortError") {
+        // The common one: a webcam can only be opened by one app at a time.
+        show("Another app has the camera",
+          "A call, OBS or NVIDIA Broadcast is holding it. Tap 🎥 for a different camera, or close the other app — this will keep trying.");
+        retry = setTimeout(start, 4000);
+      } else {
+        show("Camera trouble", (name || "Unknown") + (e && e.message ? ": " + e.message : ""));
+        retry = setTimeout(start, 6000);
+      }
+      $("who").textContent = "";
+    }
+
+    // Crop a little, never a lot: past about a 1.6x difference in shape the
+    // picture loses more than it gains.
+    function fitVideo() {
+      const v = $("cam");
+      if (!v.videoWidth || !v.videoHeight) return;
+      const stage = $("stage").getBoundingClientRect();
+      if (!stage.width || !stage.height) return;
+      const ratio = (v.videoWidth / v.videoHeight) / (stage.width / stage.height);
+      v.classList.toggle("fit", ratio < 0.62 || ratio > 1.6);
+    }
+    addEventListener("resize", fitVideo);
+
+    function shortName(label) {
+      // "NexiGo N60 FHD Webcam (3443:60bb)" -> "NexiGo N60 FHD Webcam"
+      return String(label || "camera").replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, "");
+    }
+
+    // ---- controls -----------------------------------------------------------
+    function paintHold() {
+      $("hold").textContent = held ? "▶" : "⏸";
+      $("hold").title = held ? "Use the camera again" : "Release the camera";
+    }
+    $("hold").addEventListener("pointerup", () => {
+      held = !held;
+      paintHold();
+      if (held) {
+        release();
+        show("Camera released", "Nothing here is holding it, so a call can have it. Tap ▶ to look again.");
+        $("who").textContent = "";
+      } else {
+        start();
+      }
+    });
+
+    $("mirror").addEventListener("pointerup", () => {
+      const on = !mirrored();
+      try { localStorage.setItem(KEY_MIRROR, on ? "1" : "0"); } catch (e) {}
+      $("cam").classList.toggle("mirror", on);
+    });
+
+    $("swap").addEventListener("pointerup", async () => {
+      await listCameras();
+      if (devices.length < 2) {
+        $("foot").textContent = devices.length === 1
+          ? "only one camera on this machine"
+          : "no cameras found";
+        return;
+      }
+      const at = devices.findIndex((d) => d.label === wanted);
+      wanted = devices[(at + 1 + devices.length) % devices.length].label;
+      try { localStorage.setItem(KEY_DEV, wanted); } catch (e) {}
+      held = false;
+      paintHold();
+      release();
+      start();
+    });
+
+    // Snapchat runs as an app in the shell; this just brings it to the front.
+    $("snap").addEventListener("pointerup", () => {
+      try { window.parent.postMessage({ type: "y70:open-app", app: "snapchat" }, "*"); } catch (e) {}
+    });
+
+    // ---- lifecycle ----------------------------------------------------------
+    // A webcam is exclusive: holding it while the panel is shut would break the
+    // next video call on this machine. Let it go the moment nobody is looking.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) release();
+      else if (!held) start();
+    });
+    window.addEventListener("pagehide", release);
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener("devicechange", () => { if (!held && !stream) start(); });
+    }
+
+    $("cam").classList.toggle("mirror", mirrored());
+    paintHold();
+    start();
+  </script>
+</body>
+</html>

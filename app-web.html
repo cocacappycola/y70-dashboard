@@ -51,15 +51,18 @@
       <button class="btn btn--sm btn--icon tb" id="home" title="Home">⌂</button>
       <button class="btn btn--sm btn--icon tb" id="reload" title="Reload">↻</button>
       <span class="spacer"></span>
+      <button class="btn btn--sm btn--icon tb" id="keys" title="Type into this page">⌨</button>
       <button class="btn btn--sm btn--icon tb" id="ua" title="Phone or desktop layout">📱</button>
+      <button class="btn btn--sm btn--icon tb" id="zoom-out" title="Show less">−</button>
+      <button class="btn btn--sm btn--icon tb" id="zoom-in" title="Show more">+</button>
       <button class="btn btn--sm btn--icon tb" id="auto" title="Auto scroll">▼</button>
       <input class="ui-range" id="speed" type="range" min="1" max="10" value="5" title="Auto-scroll speed" />
     </div>
     <div id="slot">
       <div id="msg">
         <b>This app needs the desktop shell</b>
-        <div>YouTube and TikTok refuse to be embedded in a normal page, so they
-        run in a native browser view that only the V2 app can create.</div>
+        <div>YouTube, TikTok and Snapchat refuse to be embedded in a normal page,
+        so they run in a native browser view that only the V2 app can create.</div>
         <div>Run <b>launch-v2.bat</b> and open this app there.</div>
       </div>
     </div>
@@ -74,6 +77,10 @@
       // A virtualised feed: scrolling by pixels does nothing, but Down advances
       // one video. Verified against YouTube Shorts, which behaves the same.
       tiktok:  { name: "TikTok",  home: "https://www.tiktok.com/foryou", mode: "next", mobile: true },
+      // Snapchat is a page you read and type in, not a feed: no auto-scroll.
+      // It also serves the "download the app" page to anything narrower than
+      // 768 CSS pixels, and the panel is 682, so it starts zoomed out.
+      snapchat: { name: "Snapchat", home: "https://www.snapchat.com/web/", mode: "page", mobile: false, zoom: 0.8 },
     };
 
     const key = new URLSearchParams(location.search).get("site") || "youtube";
@@ -82,6 +89,12 @@
     $("site-name").textContent = site.name;
 
     let auto = false, timer = null, mobile = site.mobile, native = false;
+    let zoom = Number(localStorage.getItem("y70_zoom_" + key)) || site.zoom || 1;
+
+    // A feed gets auto-scroll; a page gets a zoom control instead.
+    const feed = site.mode !== "page";
+    for (const id of ["auto", "speed"]) $(id).hidden = !feed;
+    for (const id of ["zoom-out", "zoom-in"]) $(id).hidden = feed;
 
     // ---- Talking to the shell ---------------------------------------------
     // This page is inside an iframe, so it cannot reach the native bridge
@@ -98,8 +111,20 @@
         } catch (e) { waiting.delete(id); resolve(null); }
       });
     }
+    // Signing in to Snapchat means typing, and the panel is deliberately
+    // deaf to the keyboard until you ask for it. This is that ask.
+    $("keys").addEventListener("pointerup", () => {
+      const want = !$("keys").classList.contains("is-on");
+      $("keys").classList.toggle("is-on", want);       // optimistic; the shell confirms
+      try { window.parent.postMessage({ type: "y70:keyboard", on: want }, "*"); } catch (e) {}
+    });
+
     window.addEventListener("message", (e) => {
       const d = e.data;
+      if (d && d.type === "y70:keyboard-state") {
+        $("keys").classList.toggle("is-on", !!d.on);
+        return;
+      }
       if (!d || d.type !== "y70:web-reply") return;
       const fn = waiting.get(d.id);
       if (fn) { waiting.delete(d.id); fn(d.result); }
@@ -117,6 +142,7 @@
         rect,
         url: site.home,
         mobile,
+        zoom,
         visible: !document.hidden,
       }).then((res) => {
         if (res && res.ok) {
@@ -179,6 +205,16 @@
     $("home").addEventListener("pointerup", () => ask("load", { arg: site.home }).then(syncNav));
     $("reload").addEventListener("pointerup", () => ask("reload", {}));
     $("auto").addEventListener("pointerup", () => setAuto(!auto));
+    function setZoom(z) {
+      zoom = Math.max(0.5, Math.min(1.2, Math.round(z * 20) / 20));
+      try { localStorage.setItem("y70_zoom_" + key, String(zoom)); } catch (e) {}
+      $("zoom-out").disabled = zoom <= 0.5;
+      $("zoom-in").disabled = zoom >= 1.2;
+      ask("zoom", { arg: zoom });
+    }
+    $("zoom-out").addEventListener("pointerup", () => setZoom(zoom - 0.05));
+    $("zoom-in").addEventListener("pointerup", () => setZoom(zoom + 0.05));
+
     $("ua").addEventListener("pointerup", () => {
       mobile = !mobile;
       $("ua").textContent = mobile ? "📱" : "🖥";
@@ -190,6 +226,8 @@
     speed.addEventListener("input", () => { paintSpeed(); if (auto) schedule(); });
     paintSpeed();
 
+    if (!mobile) $("ua").textContent = "🖥";
+    if (!feed) setZoom(zoom);
     place(true);
     syncNav();
   </script>

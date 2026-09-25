@@ -16,7 +16,7 @@
 //  pages V1 used, so there is one copy of the dashboard, not two.
 // ============================================================================
 const { app, BrowserWindow, WebContentsView, screen, ipcMain, Tray, Menu,
-        nativeImage, shell } = require("electron");
+        nativeImage, shell, session } = require("electron");
 const path = require("path");
 const net = require("net");
 const { spawn } = require("child_process");
@@ -36,7 +36,7 @@ const TRAY_PATH = app.isPackaged
   : path.join(__dirname, "build", "tray.png");
 
 const PORT = 8888;
-const URL = "http://127.0.0.1:" + PORT;
+const SHELL_URL = "http://127.0.0.1:" + PORT;
 
 // Without this Windows groups the window under "Electron" and shows Electron's
 // icon in the taskbar and notifications instead of ours.
@@ -161,7 +161,7 @@ function createWindow() {
   win.setAlwaysOnTop(true, "screen-saver");
   win.setMenu(null);
 
-  win.loadURL(URL);
+  win.loadURL(SHELL_URL);
   win.once("ready-to-show", () => {
     // showInactive, not show: show() would activate the window once at startup,
     // which is exactly the thing we are here to avoid.
@@ -171,11 +171,11 @@ function createWindow() {
 
   // Never let the page navigate away or spawn windows; this is a kiosk.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (!url.startsWith(URL)) shell.openExternal(url);
+    if (!url.startsWith(SHELL_URL)) shell.openExternal(url);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (e, url) => {
-    if (url.startsWith(URL)) return;
+    if (url.startsWith(SHELL_URL)) return;
     // Never navigate the panel off-site. A sign-in that tries anyway (an older
     // page, or a provider that redirects the top frame) is rerouted into the
     // proper popup rather than silently doing nothing — which is exactly how
@@ -229,7 +229,7 @@ function openAuth(url) {
 
   // The dashboard's callback page exchanges the code and then sends itself to
   // the site root. That hop is the signal that sign-in worked.
-  const finishOn = (target) => target === URL || target === URL + "/";
+  const finishOn = (target) => target === SHELL_URL || target === SHELL_URL + "/";
   authWin.webContents.on("will-navigate", (e, target) => {
     if (!finishOn(target)) return;
     e.preventDefault();
@@ -300,6 +300,55 @@ const webViews = new Map();          // site key -> WebContentsView
 const MOBILE_UA =
   "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) " +
   "Chrome/140.0.0.0 Mobile Safari/537.36";
+// Electron's own user agent carries an "Electron/41.x" token, and Snapchat for
+// Web reads that and answers "Browser not supported". Everything here is
+// Chromium, so say so plainly.
+const DESKTOP_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/140.0.0.0 Safari/537.36";
+
+const WEB_PARTITION = "persist:y70web";
+
+// Snapchat's web client needs the camera and microphone to place a call. With
+// no handler at all Electron grants every permission to every page in the
+// partition, so this narrows it: media goes to Snapchat and nowhere else, a
+// video can still go fullscreen, and a feed gets no say about your location.
+const MEDIA_HOSTS = /(^|\.)snapchat\.com$/i;
+const ALWAYS_OK = new Set(["fullscreen", "clipboard-sanitized-write"]);
+// Picking which speakers a call comes out of belongs with the camera and mic.
+const CALL_PERMS = new Set(["media", "speaker-selection"]);
+
+function hostOf(u) {
+  try { return new URL(String(u)).hostname; } catch (e) { return ""; }
+}
+// The handlers name the asking page differently depending on which one fires
+// and how early: a request carries securityOrigin and requestingUrl, while the
+// first checks of a page arrive with both of those empty and only
+// embeddingOrigin filled in. Collect every candidate and let any of them
+// match, rather than picking one field and being wrong a quarter of the time.
+function askingHosts(wc, details) {
+  const d = details || {};
+  return [d.requestingUrl, d.securityOrigin, d.embeddingOrigin, d.requestingOrigin,
+          wc && wc.getURL()].map(hostOf).filter(Boolean);
+}
+function webPermission(permission, hosts) {
+  if (ALWAYS_OK.has(permission)) return true;
+  if (CALL_PERMS.has(permission)) return hosts.some((h) => MEDIA_HOSTS.test(h));
+  return false;
+}
+function guardWebPartition() {
+  const sess = session.fromPartition(WEB_PARTITION);
+  sess.setPermissionRequestHandler((wc, permission, callback, details) => {
+    callback(webPermission(permission, askingHosts(wc, details)));
+  });
+  // getUserMedia consults this before it ever raises a request, so a "no" here
+  // fails the call outright with NotAllowedError.
+  sess.setPermissionCheckHandler((wc, permission, origin, details) => {
+    const hosts = askingHosts(wc, details);
+    if (origin) hosts.push(hostOf(origin));
+    return webPermission(permission, hosts);
+  });
+}
 
 // "Open in the app" interstitials and custom-scheme handoffs.
 function isAppLink(u) {
@@ -310,18 +359,26 @@ function isAppLink(u) {
 
 function getWebView(site) { return webViews.get(site) || null; }
 
-function makeWebView(site, url, mobile) {
+function makeWebView(site, url, mobile, zoom) {
   const view = new WebContentsView({
     webPreferences: {
       // One persistent partition for all the web apps, so a sign-in sticks and
       // stays separate from the dashboard's own origin.
-      partition: "persist:y70web",
+      partition: WEB_PARTITION,
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false,
     },
   });
-  if (mobile) view.webContents.setUserAgent(MOBILE_UA);
+  view.webContents.setUserAgent(mobile ? MOBILE_UA : DESKTOP_UA);
+  // The panel is 682px wide, and Snapchat serves the "download the app" page to
+  // anything under 768 CSS pixels. Zooming out widens the CSS viewport without
+  // making the view itself any bigger: at 0.8 a 682px panel reports 852px.
+  if (zoom && zoom !== 1) {
+    const apply = () => { try { view.webContents.setZoomFactor(zoom); } catch (e) {} };
+    view.webContents.on("did-finish-load", apply);
+    apply();
+  }
   view.setBorderRadius && view.setBorderRadius(0);
   view.setVisible(false);
   win.contentView.addChildView(view);
@@ -344,7 +401,7 @@ function makeWebView(site, url, mobile) {
 function placeWebView(site, opts) {
   if (!win || win.isDestroyed()) return { ok: false };
   let view = getWebView(site);
-  if (!view) view = makeWebView(site, opts.url, opts.mobile);
+  if (!view) view = makeWebView(site, opts.url, opts.mobile, opts.zoom);
   if (!opts.visible || !opts.rect) {
     view.setVisible(false);
     return { ok: true, visible: false };
@@ -384,8 +441,11 @@ function webAction(site, action, arg) {
         wc.sendInputEvent({ type: "keyUp", keyCode: "Down" });
         break;
       case "useragent":
-        wc.setUserAgent(arg ? MOBILE_UA : "");
+        wc.setUserAgent(arg ? MOBILE_UA : DESKTOP_UA);
         wc.reload();
+        break;
+      case "zoom":
+        wc.setZoomFactor(Math.max(0.4, Math.min(1.5, Number(arg) || 1)));
         break;
       default: return { ok: false, error: "unknown action" };
     }
@@ -404,6 +464,7 @@ function webState(site) {
     loading: wc.isLoading(),
     canGoBack: wc.navigationHistory.canGoBack(),
     canGoForward: wc.navigationHistory.canGoForward(),
+    zoom: wc.getZoomFactor(),
   };
 }
 
@@ -576,6 +637,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     try { autoStartWanted = !!app.getLoginItemSettings().openAtLogin; } catch (e) {}
     await ensureServer();
+    guardWebPartition();
     createWindow();
     createTray();
     initUpdater();
