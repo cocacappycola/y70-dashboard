@@ -135,6 +135,35 @@ draft is invisible to the updater.
 Auto-update only runs in the installed build — there is nothing to replace when
 running from source, and the app reports its status as `dev` there instead.
 
+### Forks
+
+There is more than one line of this app, each in its own repo with its own
+Releases:
+
+| Fork | Repo | What it is |
+|---|---|---|
+| **Main** | `cocacappycola/y70-dashboard` | The dashboard on its own. |
+| **Jarvis** | `cocacappycola/y70-dashboard-assistant` | Main plus Jarvis, a voice assistant, and alarms and timers in the top bar. |
+
+**Drawer → Panel** shows both. Tap the other one and confirm: it downloads that
+fork's latest build, and **Restart to switch** installs it over this one. Every
+fork has the same app id and product name, so the installer lands in the same
+folder and keeps the same user data — settings, sign-ins and notes carry over,
+and switching back is the same move in reverse.
+
+The list lives in `v2/forks.js` and every fork carries the same copy. Which
+fork a build *is* comes from its own `build.publish` in `v2/package.json`, so
+the two can never disagree about which feed it updates from.
+
+A switch is an update from another feed, with two adjustments. electron-updater
+only installs a release *newer* than the running one, and two forks' version
+numbers are unrelated (Jarvis is 3.x, Main 2.x), so while switching the updater
+is told this build is 0.0.0. And its differential download needs the installed
+build's blockmap on the target feed, which the other fork does not have, so a
+switch always downloads the full installer. Install-on-quit is switched off the
+moment a switch starts: it happens when you press the button, never because the
+app happened to restart.
+
 ### Signing in to Spotify
 
 This needed fixing for V2 and is worth knowing about. The panel window blocks

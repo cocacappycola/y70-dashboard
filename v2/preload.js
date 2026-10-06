@@ -39,6 +39,13 @@ contextBridge.exposeInMainWorld("y70native", {
   installUpdate: () => ipcRenderer.invoke("y70:update-install"),
   onUpdate: (fn) => { ipcRenderer.on("y70:update", (_e, s) => fn(s)); },
 
+  // Forks: other lines of this app, each with its own releases. Switching
+  // downloads the other fork's latest build; restarting installs it.
+  forks: () => ipcRenderer.invoke("y70:forks"),
+  switchFork: (id) => ipcRenderer.invoke("y70:fork-switch", id),
+  cancelForkSwitch: () => ipcRenderer.invoke("y70:fork-cancel"),
+  onForks: (fn) => { ipcRenderer.on("y70:forks", (_e, s) => fn(s)); },
+
   // Web apps (YouTube / TikTok) run in a native view the main process parks
   // over the rectangle the page reports, because neither site can be framed.
   webPlace: (site, opts) => ipcRenderer.invoke("y70:web-place", site, opts),

@@ -751,6 +751,7 @@ function wireNative() {
     paintUpdate(await native.checkUpdate());
   });
   $("#update-install").addEventListener("pointerup", () => native.installUpdate());
+  wireForks();
 
   // Start with Windows / taskbar presence, read back from the OS rather than
   // remembered here, so the buttons always show the truth.
@@ -775,9 +776,87 @@ function wireNative() {
   $("#native-quit").addEventListener("pointerup", () => native.quit());
 }
 
+// ---- Forks -------------------------------------------------------------------
+// Other lines of this app, each with its own releases. Picking one downloads
+// its latest build through the updater; Restart installs it over this one, in
+// the same folder with the same settings, so switching back is the same move.
+let forkInfo = null;      // { current, forks: [{id, name, about}], switchingTo, packaged }
+let forkAsk = null;       // the fork a confirm line is showing for
+let lastUpdate = null;
+
+function wireForks() {
+  if (!native.forks) { $("#fork-wrap").remove(); return; }
+  native.onForks((f) => { forkInfo = f; paintForks(); });
+  native.forks().then((f) => { forkInfo = f; paintForks(); }).catch(() => {});
+}
+
+const forkName = (id) => ((forkInfo && forkInfo.forks.find((f) => f.id === id)) || { name: id }).name;
+
+function paintForks() {
+  const row = $("#fork-row"), ask = $("#fork-ask");
+  if (!row || !forkInfo) return;
+  row.innerHTML = "";
+  for (const f of forkInfo.forks) {
+    const here = f.id === forkInfo.current;
+    const going = f.id === forkInfo.switchingTo;
+    const b = document.createElement("button");
+    b.className = "tile-btn" + (here ? " is-on" : "");
+    b.innerHTML = '<span class="t-top"><span class="dot' + (here || going ? "" : " dot--off") +
+      '"></span><span class="t-name"></span></span><span class="t-sub"></span>';
+    b.querySelector(".t-name").textContent = f.name;
+    b.querySelector(".t-sub").textContent =
+      here ? "this build" : going ? "switching to this…" : f.about;
+    b.title = f.about;
+    b.addEventListener("pointerup", () => {
+      if (here) { forkAsk = null; if (forkInfo.switchingTo) cancelSwitch(); else paintForks(); return; }
+      if (going) return;
+      forkAsk = f.id;
+      paintForks();
+    });
+    row.appendChild(b);
+  }
+
+  ask.innerHTML = "";
+  if (forkInfo.switchingTo) {
+    ask.innerHTML = '<span class="fork-q"></span><button class="btn btn--ghost btn--chip" data-act="cancel">Cancel switch</button>';
+    ask.querySelector(".fork-q").textContent = lastUpdate && lastUpdate.status === "ready"
+      ? forkName(forkInfo.switchingTo) + " is downloaded. Restart to switch — settings, sign-ins and notes carry over."
+      : "Fetching " + forkName(forkInfo.switchingTo) + "’s latest build…";
+  } else if (forkAsk) {
+    if (!forkInfo.packaged) {
+      ask.innerHTML = '<span class="fork-q">Run from source there is nothing to replace — forks switch in the installed build.</span>';
+    } else {
+      ask.innerHTML = '<span class="fork-q"></span>' +
+        '<button class="btn btn--primary btn--chip" data-act="go">Switch</button>' +
+        '<button class="btn btn--ghost btn--chip" data-act="no">Not now</button>';
+      ask.querySelector(".fork-q").textContent = "Switch to " + forkName(forkAsk) +
+        "? This downloads its latest build; Restart installs it. Settings, sign-ins and notes carry over, and you can switch back the same way.";
+    }
+  }
+  ask.querySelectorAll("button").forEach((btn) => btn.addEventListener("pointerup", async () => {
+    const act = btn.dataset.act;
+    if (act === "no") { forkAsk = null; paintForks(); return; }
+    if (act === "cancel") { cancelSwitch(); return; }
+    if (act === "go") {
+      const r = await native.switchFork(forkAsk);
+      forkAsk = null;
+      if (r && r.ok === false) $("#update-status").textContent = r.error || "could not switch";
+      if (r && r.forks) forkInfo = r;
+      paintForks();
+    }
+  }));
+}
+
+async function cancelSwitch() {
+  const r = await native.cancelForkSwitch();
+  if (r && r.forks) forkInfo = r;
+  paintForks();
+}
+
 // The updater's own words, in plain ones.
 function paintUpdate(u) {
   if (!u) return;
+  lastUpdate = u;
   const status = $("#update-status");
   const install = $("#update-install");
   if (!status) return;
@@ -795,8 +874,12 @@ function paintUpdate(u) {
   status.textContent = text;
   status.title = u.error || "";
   install.style.display = u.status === "ready" ? "" : "none";
+  const switching = forkInfo && forkInfo.switchingTo;
+  install.textContent = switching ? "Restart to switch to " + forkName(switching) : "Restart to update";
+  if (switching && u.status === "ready") status.textContent = forkName(switching) + " v" + (u.version || "?") + " ready";
   const check = $("#update-check");
-  if (check) check.disabled = u.status === "checking" || u.status === "downloading";
+  if (check) check.disabled = u.status === "checking" || u.status === "downloading" || !!switching;
+  paintForks();
 }
 
 function setKeyboardIndicator(on) {

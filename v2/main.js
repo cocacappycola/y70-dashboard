@@ -22,6 +22,7 @@ const net = require("net");
 const fs = require("fs");
 const { spawn } = require("child_process");
 const { autoUpdater } = require("electron-updater");
+const forks = require("./forks");
 
 // Where the dashboard's pages and server live. When packaged they are copied
 // in as an extraResource, because __dirname points inside app.asar and the
@@ -36,7 +37,9 @@ const TRAY_PATH = app.isPackaged
   ? path.join(process.resourcesPath, "build", "tray.png")
   : path.join(__dirname, "build", "tray.png");
 
-const PORT = 8888;
+// Same override the server takes, so a second copy can be run beside the live
+// panel without the two fighting over one port.
+const PORT = Number(process.env.Y70_PORT) || 8888;
 const SHELL_URL = "http://127.0.0.1:" + PORT;
 
 // Without this Windows groups the window under "Electron" and shows Electron's
@@ -623,12 +626,84 @@ setInterval(() => {
 // ---------------------------------------------------------------- update ----
 // Reads GitHub Releases. The repo is public, so no token is needed anywhere and
 // nothing sensitive ships in the installer.
-let updateState = { status: "idle", version: null, percent: 0, error: null, notes: null };
+//
+// `fork` is the fork the pending download belongs to: this build's own fork for
+// an ordinary update, the other one while a switch is under way.
+let updateState = { status: "idle", version: null, percent: 0, error: null, notes: null, fork: null };
 
 function setUpdate(patch) {
   updateState = { ...updateState, ...patch };
   if (win && !win.isDestroyed()) win.webContents.send("y70:update", updateState);
   updateTray();
+}
+
+// ------------------------------------------------------------ fork switch ---
+// Switching forks is an update from a different feed. Two things make that
+// work in both directions:
+//
+//  - electron-updater only installs a release NEWER than the running build, and
+//    two forks' version numbers have nothing to do with each other (Jarvis is
+//    3.x, Main is 2.x). So while switching, the updater is told this build is
+//    0.0.0 and whatever the other fork's latest release is counts as newer.
+//    It has to be a SemVer object from electron-updater's own copy of semver —
+//    a plain string throws "format is not a function".
+//  - Its differential download reuses blocks of the installed build, located by
+//    this build's version on the target feed. That file does not exist on the
+//    other fork's releases, so download the whole installer.
+//
+// Install-on-quit is turned off for the rest of the session the moment a switch
+// starts: a switch happens because you pressed the button, never because the
+// app happened to restart, and a cancelled one must not come back later.
+const OWN_FORK = forks.currentFork();
+let switchingTo = null;
+
+// Resolved from electron-updater's own folder, exactly as it resolves it.
+function updaterSemver() {
+  return require(require.resolve("semver", { paths: [path.dirname(require.resolve("electron-updater"))] }));
+}
+function realVersion() {
+  return updaterSemver().parse(getAppVersion());
+}
+
+function forkState() {
+  return { ...forks.describe(), switchingTo, packaged: app.isPackaged };
+}
+function reportForks() {
+  if (win && !win.isDestroyed()) win.webContents.send("y70:forks", forkState());
+}
+
+function switchFork(id) {
+  const target = forks.forkById(String(id));
+  if (!target) return { ok: false, error: "unknown fork" };
+  if (!app.isPackaged) return { ok: false, error: "Run from source there is nothing to replace." };
+  if (OWN_FORK && target.id === OWN_FORK.id) return cancelSwitch();
+  if (updateState.status === "downloading" || updateState.status === "checking") {
+    return { ok: false, error: "An update is already downloading." };
+  }
+
+  switchingTo = target.id;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.disableDifferentialDownload = true;
+  autoUpdater.setFeedURL(forks.feedFor(target));
+  autoUpdater.currentVersion = updaterSemver().parse("0.0.0");
+  setUpdate({ status: "checking", error: null, version: null, percent: 0, fork: target.id });
+  reportForks();
+  autoUpdater.checkForUpdates().catch(() => {});
+  return { ok: true, ...forkState() };
+}
+
+function cancelSwitch() {
+  if (!switchingTo) return { ok: true, ...forkState() };
+  switchingTo = null;
+  if (OWN_FORK) autoUpdater.setFeedURL(forks.feedFor(OWN_FORK));
+  autoUpdater.currentVersion = realVersion();
+  autoUpdater.disableDifferentialDownload = false;
+  // A downloaded installer from the other fork may still be on disk; with
+  // install-on-quit left off for this session it can only ever run if you
+  // press Restart, which the drawer no longer offers for it.
+  setUpdate({ status: "idle", error: null, version: null, percent: 0, fork: OWN_FORK ? OWN_FORK.id : null });
+  reportForks();
+  return { ok: true, ...forkState() };
 }
 
 function initUpdater() {
@@ -637,9 +712,13 @@ function initUpdater() {
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  setUpdate({ fork: OWN_FORK ? OWN_FORK.id : null });
 
   autoUpdater.on("checking-for-update", () => setUpdate({ status: "checking", error: null }));
-  autoUpdater.on("update-not-available", () => setUpdate({ status: "current" }));
+  autoUpdater.on("update-not-available", () => setUpdate({
+    status: switchingTo ? "error" : "current",
+    error: switchingTo ? "That fork has no releases yet." : null,
+  }));
   autoUpdater.on("update-available", (i) => setUpdate({ status: "downloading", version: i.version, notes: i.releaseName || null }));
   autoUpdater.on("download-progress", (p) => setUpdate({ status: "downloading", percent: Math.round(p.percent) }));
   autoUpdater.on("update-downloaded", (i) => setUpdate({ status: "ready", version: i.version, percent: 100 }));
@@ -710,7 +789,10 @@ function updateTray() {
       click: () => setShowInTaskbar(!showInTaskbar) },
     { type: "separator" },
     ...(updateState.status === "ready"
-      ? [{ label: "Restart to update to " + updateState.version, click: () => installUpdate() },
+      ? [{ label: switchingTo
+             ? "Restart to switch to " + ((forks.forkById(switchingTo) || {}).name || switchingTo)
+             : "Restart to update to " + updateState.version,
+           click: () => installUpdate() },
          { type: "separator" }]
       : []),
     { label: "Reload", click: () => win && win.reload() },
@@ -765,6 +847,9 @@ ipcMain.handle("y70:update-check", () => {
   return updateState;
 });
 ipcMain.handle("y70:update-install", () => installUpdate());
+ipcMain.handle("y70:forks", () => forkState());
+ipcMain.handle("y70:fork-switch", (_e, id) => switchFork(id));
+ipcMain.handle("y70:fork-cancel", () => cancelSwitch());
 // app.getVersion() reads our package.json only when Electron loaded this
 // folder as the app; from a test harness it hands back Electron's own version
 // instead. Read the manifest directly so the drawer never lies about the build.

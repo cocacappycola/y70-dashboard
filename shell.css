@@ -149,6 +149,14 @@ body.keyboard-mode #kb-banner { display: flex; }
 body.keyboard-mode #topbar .grip { opacity: 0; }
 .tile-row.native-only { flex-wrap: wrap; }
 
+/* Forks. Two tile-btns side by side; the confirm line sits under them. */
+.fork-wrap { flex-direction: column; gap: 8px; margin-top: 10px; }
+.fork-row { display: flex; gap: 10px; }
+.fork-row .tile-btn { min-height: 56px; }
+.fork-ask { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--sub); }
+.fork-ask:empty { display: none; }
+.fork-ask .fork-q { flex: 1 1 100%; line-height: 1.35; }
+
 .app-tile.active { border-color: var(--trim-line); background: var(--trim-soft); }
 .wid-tile.on { border-color: var(--trim); }
 .wid-tile.on::after { content: "✓"; color: var(--trim); font-size: 13px; margin-left: 2px; }
