@@ -916,7 +916,7 @@ async function handleWebMessage(source, d) {
     const isActive = frame && frame.classList.contains("active");
     // Anything drawn over the app area — the drawer and its backdrop — would be
     // covered by a native view, which sits above all HTML. Hide it instead.
-    const covered = drawer.classList.contains("open") || !backdrop.classList.contains("hidden");
+    const covered = isCovered();
     if (!frame || !isActive || covered || !d.visible) {
       return reply(await native.webPlace(d.site, { visible: false }));
     }
@@ -950,7 +950,7 @@ async function handlePinMessage(source, d) {
   if (d.action === "place") {
     // The drawer is HTML and a real window would sit on top of it, so the
     // borrowed window steps aside whenever the drawer is down.
-    const covered = drawer.classList.contains("open") || !backdrop.classList.contains("hidden");
+    const covered = isCovered();
     const frame = pinFrame();
     if (covered || !d.visible || !frame) return reply(await native.pinPlace({ visible: false }));
     const fr = frame.getBoundingClientRect();
@@ -966,11 +966,19 @@ async function handlePinMessage(source, d) {
   return reply({ ok: false, error: "unknown action" });
 }
 
+// Anything drawn over the app area. Native views sit above all HTML, so while
+// any of these is up they are hidden rather than left covering it. Overlays
+// outside the drawer (the island card) mark themselves with body.overlay-open.
+function isCovered() {
+  return drawer.classList.contains("open") || !backdrop.classList.contains("hidden") ||
+    document.body.classList.contains("overlay-open");
+}
+
 // Switching apps or opening the drawer must take the native view down with it,
 // otherwise it hangs over whatever is now on top.
 function syncWebViews() {
   if (!native) return;
-  const covered = drawer.classList.contains("open") || !backdrop.classList.contains("hidden");
+  const covered = isCovered();
   const activeIsWeb = /^(youtube|shorts|tiktok|snapchat)$/.test(state.app);
   if (covered || !activeIsWeb) native.webHideAll();
   // When it should be visible the app page re-places it on its own next tick.

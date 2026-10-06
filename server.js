@@ -14,6 +14,7 @@
 //    /api/notes   -> reads/writes notes.txt in the data folder
 //    /api/discord -> Discord RPC: real mute/deafen, voice channel, speaking
 //    /api/phone   -> iPhone notifications, calls and battery over BLE (ANCS)
+//    /api/jarvis/ -> the Jarvis assistant (see assistant.js)
 //    everything else -> static files from this folder
 //
 //  Run with:   node server.js
@@ -26,6 +27,11 @@ const os = require("os");
 const { spawn } = require("child_process");
 const https = require("https");
 const discord = require("./discord");
+const assistant = require("./assistant");
+
+let Anthropic = null;
+try { Anthropic = require("@anthropic-ai/sdk"); Anthropic = Anthropic.default || Anthropic; }
+catch (e) { /* the Claude routes say so when asked */ }
 
 const HOST = "127.0.0.1";
 // The shell and every page assume 8888; the override exists so a second copy
@@ -43,7 +49,8 @@ try { fs.mkdirSync(DATA, { recursive: true }); } catch (e) {}
 
 // State written before that split may still be sitting beside the code. Carry
 // it across once rather than silently starting the user over.
-const STATE_FILES = ["claude-key.txt", "notes.txt", "discord-app.json", "discord-token.json"];
+const STATE_FILES = ["claude-key.txt", "notes.txt", "discord-app.json", "discord-token.json"]
+  .concat(assistant.STATE_FILES);
 function stateFile(name) {
   const target = path.join(DATA, name);
   if (DATA !== ROOT && !fs.existsSync(target)) {
@@ -80,6 +87,12 @@ function readClaudeKey() {
   }
 }
 
+// Written from Jarvis's settings. An empty key removes it.
+function writeClaudeKey(key) {
+  if (!key) { try { fs.unlinkSync(CLAUDE_KEY_FILE); } catch (e) {} return; }
+  fs.writeFileSync(CLAUDE_KEY_FILE, key + "\n", "utf8");
+}
+
 function json(res, status, obj) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(obj));
@@ -101,38 +114,30 @@ async function handleClaude(req, res) {
     try { payload = JSON.parse(body || "{}"); } catch { return json(res, 400, { error: "bad_json" }); }
     if (!payload.prompt) return json(res, 400, { error: "missing_prompt" });
 
+    if (!Anthropic) return json(res, 503, { error: "no_sdk", message: "The Anthropic SDK is not installed (npm install)." });
     try {
-      const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": key,
-          "anthropic-version": "2023-06-01",
-          // Server-side fallback: if a safety classifier declines, the request
-          // is automatically re-served by Anthropic's recommended fallback model.
-          "anthropic-beta": "server-side-fallback-2026-07-01",
-        },
-        body: JSON.stringify({
-          model: CLAUDE_MODEL,
-          max_tokens: 300,
-          output_config: { effort: "low" },
-          fallbacks: "default",
-          system: payload.system || undefined,
-          messages: [{ role: "user", content: payload.prompt }],
-        }),
+      const client = new Anthropic({ apiKey: key });
+      // Server-side fallback: if a safety classifier declines, the request is
+      // automatically re-served by Anthropic's recommended fallback model.
+      const data = await client.beta.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 300,
+        output_config: { effort: "low" },
+        betas: ["server-side-fallback-2026-07-01"],
+        fallbacks: "default",
+        system: payload.system || undefined,
+        messages: [{ role: "user", content: payload.prompt }],
       });
-
-      const data = await apiRes.json();
-      if (!apiRes.ok) {
-        console.error("Claude API error:", apiRes.status, JSON.stringify(data).slice(0, 300));
-        return json(res, apiRes.status, { error: "api_error", detail: data.error?.message || "unknown" });
-      }
       if (data.stop_reason === "refusal") {
         return json(res, 200, { text: null, error: "refusal" });
       }
       const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
       return json(res, 200, { text, model: data.model });
     } catch (e) {
+      if (e instanceof Anthropic.APIError && e.status) {
+        console.error("Claude API error:", e.status, e.message.slice(0, 300));
+        return json(res, e.status, { error: "api_error", detail: e.message });
+      }
       console.error("Claude proxy failed:", e.message);
       return json(res, 502, { error: "proxy_failed", detail: e.message });
     }
@@ -955,6 +960,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && urlPath === "/api/lyrics") {
     return handleLyrics(req, res, new URL(req.url, "http://localhost").searchParams);
   }
+  if (urlPath.startsWith("/api/jarvis/")) return assistant.handle(req, res, urlPath);
 
   // The shell (app frame) is the front door; the OAuth redirect lands on the
   // Spotify app directly so it can finish the login at top level.
@@ -1003,6 +1009,10 @@ server.on("error", (err) => {
 });
 
 discord.init(DATA);
+assistant.init({
+  ROOT, DATA, PORT, stateFile, json, readJsonBody, readClaudeKey, writeClaudeKey,
+  sysSend, sysState: () => { sys.lastAsk = Date.now(); sysStart(); return sys.state; },
+});
 
 server.listen(PORT, HOST, () => {
   console.log("");

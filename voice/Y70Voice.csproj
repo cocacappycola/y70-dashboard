@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Y70 voice helper — Jarvis's ears and mouth.
+
+    Speaks the same protocol as the other helpers: JSON lines on stdout,
+    commands as JSON lines on stdin.
+
+    Two speech engines, because neither does everything:
+      - System.Speech (desktop SAPI) runs fully offline and can listen for one
+        phrase all day for almost nothing, so it carries the wake word and the
+        offline dictation fallback.
+      - Windows.Media.SpeechRecognition (WinRT) is the recognizer behind Win+H
+        voice typing. Its dictation is far more accurate but uses Microsoft's
+        online service, and only works once "Online speech recognition" is on
+        in Settings > Privacy > Speech.
+    WinRT events are why this is C# and not PowerShell (see ancs/).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>y70-voice</AssemblyName>
+    <RootNamespace>Y70Voice</RootNamespace>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Speech" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

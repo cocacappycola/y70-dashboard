@@ -1,0 +1,224 @@
+/* ===========================================================================
+   Jarvis fork — the status bar, the island, Jarvis himself.
+
+   The top bar becomes a status bar: the clock on the left, the island in the
+   middle (Apple's Dynamic Island: a black pill that grows into a card), the
+   next alarm and the Jarvis button on the right. Dragging anywhere on the bar
+   that is not the island or a button still pulls the drawer down.
+   =========================================================================== */
+
+:root {
+  --topbar-h: 34px;
+  /* The island is always black, like the hardware cut-out it imitates. */
+  --isl-bg: #000;
+  --isl-line: rgba(255, 255, 255, .10);
+  --isl-text: #f4f2f7;
+  --isl-sub: rgba(244, 242, 247, .62);
+  --jv-a: var(--trim, #A85CD6);
+  --jv-b: #5ab0ff;
+  --jv-c: #ff5fa2;
+  --jv-d: #ffb35c;
+}
+
+/* ---------------------------------------------------------- status bar --- */
+/* Above the island's backdrop, so the pill that opened the card stays sharp
+   and tappable to close it. Everything else that drops from the top starts
+   below the bar, so nothing is hidden by this. */
+#topbar { justify-content: center; z-index: 92; }
+.sb-side {
+  position: absolute; top: 0; bottom: 0; display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums;
+}
+.sb-left { left: 14px; }
+.sb-right { right: 6px; }
+#sb-alarm { font-size: 11.5px; color: var(--sub); font-weight: 600; }
+#sb-alarm::before { content: "\23F0\FE0E"; margin-right: 4px; opacity: .8; }
+
+#jv-btn {
+  width: 44px; height: 30px; border: 0; padding: 0; background: transparent;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  border-radius: var(--r-pill); touch-action: manipulation;
+}
+#jv-btn:active { background: var(--trim-soft); }
+#jv-btn[hidden] { display: none; }
+
+/* The orb — Jarvis's face everywhere he appears. */
+.jv-orb {
+  width: 18px; height: 18px; border-radius: 50%; display: block; flex-shrink: 0;
+  background:
+    radial-gradient(circle at 35% 30%, rgba(255,255,255,.9) 0 8%, transparent 32%),
+    conic-gradient(from var(--jv-spin, 0deg), var(--jv-a), var(--jv-b), var(--jv-c), var(--jv-d), var(--jv-a));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--jv-a) 55%, transparent);
+  transform: scale(var(--jv-level, 1));
+  transition: transform .09s linear;
+}
+body.jv-active .jv-orb { animation: jv-spin 2.4s linear infinite; }
+body.jv-listening .jv-orb { animation-duration: 1.2s; }
+body.jv-speaking .jv-orb { animation-duration: 3.2s; }
+@property --jv-spin { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
+@keyframes jv-spin { to { --jv-spin: 360deg; } }
+.jarvis-ico { background: #000; border: 1px solid var(--isl-line); }
+
+/* Hide the grip while the island sits in its place. */
+body.island-on #topbar > .grip { opacity: 0; }
+
+/* -------------------------------------------------------------- island --- */
+#island {
+  position: absolute; top: 4px; left: 50%; transform: translateX(-50%);
+  height: calc(var(--topbar-h) - 8px); min-width: 0; max-width: 62%;
+  padding: 0; border-radius: var(--r-pill);
+  background: var(--isl-bg); color: var(--isl-text);
+  border: 1px solid transparent;
+  display: flex; align-items: center; gap: 10px; overflow: hidden; white-space: nowrap;
+  font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums;
+  opacity: 0; pointer-events: none; cursor: pointer; touch-action: manipulation;
+  transition: opacity .25s ease, padding .35s cubic-bezier(.22, 1, .36, 1), border-color .25s;
+  z-index: 3;
+}
+body.island-on #island {
+  opacity: 1; pointer-events: auto; padding: 0 12px 0 6px; border-color: var(--isl-line);
+}
+#island .seg { display: flex; align-items: center; gap: 7px; min-width: 0; }
+#island .seg + .seg { padding-left: 10px; border-left: 1px solid var(--isl-line); }
+#island .seg-label { overflow: hidden; text-overflow: ellipsis; }
+#island .seg-ico { width: 18px; text-align: center; opacity: .85; }
+#island .seg.ring { color: #ffd36b; animation: isl-pulse 1s ease-in-out infinite; }
+@keyframes isl-pulse { 50% { opacity: .55; } }
+
+/* Little live bars while Jarvis speaks. */
+.jv-bars { display: inline-flex; gap: 2px; align-items: center; height: 12px; }
+.jv-bars i { width: 2px; height: 4px; border-radius: 1px; background: var(--jv-b); animation: jv-bar .9s ease-in-out infinite; }
+.jv-bars i:nth-child(2) { animation-delay: .15s; background: var(--jv-a); }
+.jv-bars i:nth-child(3) { animation-delay: .3s; background: var(--jv-c); }
+.jv-bars i:nth-child(4) { animation-delay: .45s; background: var(--jv-d); }
+@keyframes jv-bar { 50% { height: 12px; } }
+
+/* ---------------------------------------------------------------- card --- */
+#island-backdrop {
+  position: absolute; inset: 0; z-index: 88; background: rgba(0, 0, 0, .45);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+#island-card {
+  position: absolute; top: calc(var(--topbar-h) + 2px); left: 10px; right: 10px; z-index: 90;
+  max-height: calc(100vh - var(--topbar-h) - 40px); overflow-y: auto;
+  background: var(--isl-bg); color: var(--isl-text);
+  border: 1px solid var(--isl-line); border-radius: 30px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .7);
+  padding: 16px 16px 14px;
+  transform-origin: 50% 0; transform: scale(.2, .04); opacity: 0; pointer-events: none;
+  transition: transform .42s cubic-bezier(.22, 1.2, .36, 1), opacity .2s ease;
+}
+#island-card.in { transform: none; opacity: 1; pointer-events: auto; }
+#island-card::-webkit-scrollbar { width: 0; }
+/* A divider above every visible section that follows another visible one. */
+.ic-sec:not([hidden]) ~ .ic-sec:not([hidden]) { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--isl-line); }
+.ic-head {
+  font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--isl-sub); display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.ic-head .spacer { flex: 1; }
+#island-card .btn { --ui-card: rgba(255,255,255,.07); --ui-card-line: rgba(255,255,255,.12); --ui-text: var(--isl-text); }
+
+/* Ringing */
+.ic-ring { text-align: center; padding: 6px 0 2px; }
+.ic-ring .r-time { font-size: 54px; font-weight: 200; letter-spacing: -.02em; line-height: 1; }
+.ic-ring .r-label { font-size: 15px; color: var(--isl-sub); margin: 6px 0 14px; }
+.ic-ring .r-btns { display: flex; gap: 10px; }
+.ic-ring .r-btns button {
+  flex: 1; min-height: 64px; border: 0; border-radius: 22px; font: inherit; font-size: 17px; font-weight: 700;
+  cursor: pointer; touch-action: manipulation;
+}
+.ic-ring .r-snooze { background: #2b2b30; color: #fff; }
+.ic-ring .r-stop { background: #ffb340; color: #1c1300; }
+
+/* Jarvis's part of the card */
+.jv-top { display: flex; align-items: center; gap: 12px; }
+.jv-top .jv-orb { width: 34px; height: 34px; }
+.jv-state { font-size: 12px; font-weight: 650; color: var(--isl-sub); }
+.jv-heard { font-size: 15px; color: var(--isl-sub); margin-top: 10px; line-height: 1.35; }
+.jv-heard:empty { display: none; }
+.jv-reply { font-size: 19px; line-height: 1.38; margin-top: 8px; font-weight: 500; white-space: pre-wrap; }
+.jv-reply:empty { display: none; }
+.jv-status { font-size: 11.5px; color: var(--isl-sub); margin-top: 8px; display: flex; gap: 6px; align-items: center; }
+.jv-status:empty { display: none; }
+.jv-status .spin {
+  width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--isl-line); border-top-color: var(--jv-b);
+  animation: jv-rot .8s linear infinite;
+}
+@keyframes jv-rot { to { transform: rotate(360deg); } }
+.jv-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.jv-type { display: flex; gap: 8px; margin-top: 10px; }
+.jv-type input { flex: 1; }
+.jv-note { font-size: 11px; color: #ffd36b; margin-top: 8px; }
+.jv-note:empty { display: none; }
+
+/* Cards Jarvis puts on screen */
+.jv-cards { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.jv-cards:empty { display: none; }
+.jc { background: rgba(255,255,255,.06); border: 1px solid var(--isl-line); border-radius: 18px; padding: 12px 13px; }
+.jc-title { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--isl-sub); margin-bottom: 8px; }
+.jc-row { display: flex; gap: 10px; padding: 8px 0; text-decoration: none; color: inherit; cursor: pointer; }
+.jc-row + .jc-row { border-top: 1px solid var(--isl-line); }
+.jc-row img { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; flex-shrink: 0; background: #111; }
+.jc-row .t { font-size: 14px; font-weight: 650; line-height: 1.3; }
+.jc-row .s { font-size: 12px; color: var(--isl-sub); line-height: 1.35; margin-top: 3px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.jc-row .m { font-size: 10.5px; color: var(--jv-b); margin-top: 3px; }
+.jc-imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.jc-imgs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; background: #111; cursor: pointer; }
+.jc-big { width: 100%; border-radius: 14px; margin-top: 8px; display: block; }
+.jc-wx-now { display: flex; align-items: center; gap: 14px; }
+.jc-wx-now .temp { font-size: 46px; font-weight: 200; line-height: 1; }
+.jc-wx-now .sky { font-size: 15px; font-weight: 600; text-transform: capitalize; }
+.jc-wx-now .more { font-size: 12px; color: var(--isl-sub); margin-top: 2px; }
+.jc-wx-days { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 6px; margin-top: 12px; }
+.jc-wx-days > div { background: rgba(255,255,255,.05); border-radius: 12px; padding: 7px 8px; font-size: 12px; }
+.jc-wx-days b { display: block; font-size: 11px; text-transform: capitalize; color: var(--isl-sub); font-weight: 600; }
+.jc-wx-days .more { font-size: 11px; color: var(--isl-sub); margin-top: 2px; text-transform: capitalize; }
+.jv-again .jv-orb { width: 16px; height: 16px; }
+
+/* Timers and alarms in the card */
+.tm-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.tm-row + .tm-row { border-top: 1px solid var(--isl-line); }
+.tm-row .big { font-size: 30px; font-weight: 200; font-variant-numeric: tabular-nums; min-width: 104px; letter-spacing: -.01em; }
+.tm-row .lbl { flex: 1; min-width: 0; font-size: 13px; color: var(--isl-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tm-row.paused .big { color: var(--isl-sub); }
+.tm-row.off .big { color: rgba(255,255,255,.3); }
+.tm-row .days { display: block; font-size: 10.5px; color: var(--isl-sub); margin-top: 1px; }
+.ic-quick { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.al-new { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.al-new .al-time { font-size: 30px; font-weight: 200; font-variant-numeric: tabular-nums; min-width: 120px; text-align: center; }
+.al-days { display: flex; gap: 4px; flex-wrap: wrap; width: 100%; margin-top: 4px; }
+.al-days .btn { min-width: 38px; padding: 0 8px; }
+
+/* -------------------------------------------------------------- glow ---- */
+/* Apple Intelligence style: light running round the screen edge while Jarvis
+   is listening or answering. Drawn with a masked conic gradient, so it costs
+   one composited layer. */
+#jv-glow {
+  position: absolute; inset: 0; z-index: 95; pointer-events: none;
+  padding: 5px; border-radius: 6px;
+  background: conic-gradient(from var(--jv-spin, 0deg), var(--jv-a), var(--jv-b), var(--jv-c), var(--jv-d), var(--jv-a));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  filter: blur(6px); opacity: 0; transition: opacity .4s ease;
+}
+body.jv-active #jv-glow { opacity: .95; animation: jv-spin 3s linear infinite; }
+body.jv-listening #jv-glow { padding: 7px; animation-duration: 1.6s; }
+
+/* ------------------------------------------------------- settings form --- */
+#jarvis-close { display: flex; align-items: center; justify-content: center; padding: 10px 0 12px; cursor: pointer; }
+.jf-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.jf-row + .jf-row { margin-top: 8px; }
+.jf-row .ui-input { flex: 1; min-width: 160px; }
+.jf-status { font-size: 11.5px; color: var(--sub); line-height: 1.4; margin-top: 6px; }
+.jf-status.warn { color: #ffd36b; }
+.jf-status.bad { color: var(--ui-danger, #ff5b6e); }
+.jf-status.good { color: var(--ui-live, #46d18a); }
+.jf-facts { display: flex; flex-direction: column; gap: 6px; }
+.jf-fact { display: flex; gap: 8px; align-items: center; background: var(--panel); border-radius: var(--r-sm); padding: 6px 6px 6px 10px; font-size: 12.5px; }
+.jf-fact span { flex: 1; }
+.jf-area { width: 100%; min-height: 84px; resize: vertical; font-family: inherit; }
+.jf-slider { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--sub); }
+.jf-slider .ui-range { flex: 1; }
+#jarvis-form input, #jarvis-form textarea { user-select: text; }

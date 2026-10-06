@@ -5,6 +5,9 @@ discord-token.json
 
 # Local state, not code.
 notes.txt
+jarvis.json
+jarvis-memory.json
+jarvis-history.json
 
 # Dependencies and build output (V2 app shell).
 node_modules/
@@ -21,3 +24,7 @@ desktop.ini
 # ANCS bridge build output (rebuilt with: cd ancs && dotnet publish -c Release -o bin/out)
 ancs/bin/
 ancs/obj/
+
+# Voice helper build output (rebuilt with: cd voice && dotnet publish -c Release -o bin/out)
+voice/bin/
+voice/obj/

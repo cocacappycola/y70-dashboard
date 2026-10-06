@@ -1,8 +1,8 @@
 {
   "name": "y70-dashboard",
-  "version": "2.7.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "Native shell for the HYTE Y70 Touch dashboard \u2014 a window that never steals focus.",
+  "description": "Native shell for the HYTE Y70 Touch dashboard \u2014 Jarvis fork: a voice assistant on a window that never steals focus.",
   "author": "Cappy",
   "main": "main.js",
   "scripts": {
@@ -57,7 +57,12 @@
           "pcstats.ps1",
           "winpin.ps1",
           "syscontrol.ps1",
-          "discord-app.example.json"
+          "discord-app.example.json",
+          "assistant.js",
+          "assistant-web.js",
+          "search-ddgs.py",
+          "jarvis.js",
+          "jarvis.css"
         ]
       },
       {
@@ -65,6 +70,27 @@
         "to": "dashboard/ancs/bin/out",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "../voice/bin/out",
+        "to": "dashboard/voice/bin/out",
+        "filter": [
+          "**/*",
+          "!*.pdb"
+        ]
+      },
+      {
+        "from": "../node_modules",
+        "to": "dashboard/node_modules",
+        "filter": [
+          "**/*",
+          "!**/*.map",
+          "!**/*.d.ts",
+          "!**/*.d.mts",
+          "!**/*.d.cts",
+          "!**/src/**",
+          "!**/*.md"
         ]
       }
     ],
@@ -102,7 +128,7 @@
       {
         "provider": "github",
         "owner": "cocacappycola",
-        "repo": "y70-dashboard",
+        "repo": "y70-dashboard-assistant",
         "releaseType": "release"
       }
     ]

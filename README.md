@@ -4,6 +4,90 @@
 > you are doing. Run **[`launch-v2.bat`](launch-v2.bat)**; quit from the tray icon.
 > V1 (the browser build) is still here and still works — it is tagged `v1` in git.
 
+> **This is the Jarvis fork** (`y70-dashboard-assistant`, 3.x): Main plus a
+> voice assistant and a Dynamic-Island-style status bar. Switch between this and
+> Main from **Drawer → Panel** — see [Forks](#forks).
+
+## Jarvis
+
+Say **"Jarvis"** (or tap the orb at the right of the top bar) and ask. He
+answers out loud, puts anything worth seeing on the panel, and can do things:
+
+| Ask | What happens |
+|---|---|
+| "Jarvis, set a timer for ten minutes for the pasta" | A timer in the island; it rings there |
+| "Wake me at 7 on weekdays" | A repeating alarm; the next one shows in the top bar |
+| "Play Radiohead" / "play my gym playlist" / "pause" / "next" | Spotify search-and-play; transport goes to whatever is playing |
+| "What's the weather tomorrow?" | Spoken answer plus a forecast card |
+| "Who won the F1 race?" / "summarise that article" | Web search (and page reading), answered from sources |
+| "Show me a western fence lizard" | Pictures on the panel; tap one to see it big |
+| "Turn it down a bit" / "mute Discord" | System volume / Discord voice |
+| "Remember that…" / "add milk to my notes" | Memory / the Notes widget |
+
+"Jarvis, set a timer for five minutes" works in one breath: the name and the
+request are heard together. If his answer ends in a question, he listens again
+for your reply. Tapping the orb while he talks stops him; holding it opens a
+box to type into instead.
+
+### Setting it up
+
+1. **Brain.** Drawer → Settings → **Jarvis**. Paste an Anthropic API key
+   (console.anthropic.com) for Claude — Haiku 4.5 by default, the fast and cheap
+   one; Sonnet 5.5 and Opus 5.5 are a tap away. The key is written to the data
+   folder and is never shown or served back. **Auto** uses the local model when
+   it is running and Claude when it is not.
+2. **Local model.** `E:\OLLAMAMODEL2026\gguf\jarvis-llm.bat` runs llama-server in
+   router mode on port 8081 with **Qwen3.5 9B** and **Qwen3.5 4B** (unsloth
+   UD-Q4_K_XL), one loaded at a time, unloaded after 10 idle minutes so games get
+   the VRAM back. Start / Stop / Edit it from Jarvis's settings. Per-model
+   settings are in `jarvis-models.ini` beside it. With *Use the 4B while gaming*
+   on, a game in front (any other program filling its monitor) switches to the
+   4B and unloads the 9B immediately. Your 27B chat model fills the card by
+   itself, so with both running set `NGL=0` in the bat (CPU — slow: the first
+   tool-using answer takes about a minute).
+3. **Hearing.** The wake word is recognised offline by Windows' own engine and
+   nothing leaves the PC until you ask something. The request itself is heard by
+   Windows' **online** recognizer when *Online speech recognition* is on in
+   Jarvis's settings — the one Win+H uses, far more accurate — which also needs
+   **Windows Settings › Privacy & security › Speech › Online speech recognition**.
+   With either off, the offline recognizer does the job (it mishears much more).
+   Jarvis listens on Windows' **default recording device** — currently a
+   Voicemeeter bus on this PC, so route your mic to it or change the default.
+4. **Voice.** Any installed Windows voice; an en-GB one (Settings › Time &
+   language › Speech › Add voices) suits a Jarvis.
+5. **About you / memory.** Name, what to call you, free text, home for the
+   weather. Facts you ask him to remember are listed and can be deleted. He can
+   also read the MCP memory server's graph (`E:\OLLAMAMODEL2026\memory.json`) so
+   he knows what your other assistant knows. All of it goes into each request
+   to whichever brain answers.
+
+### How it works
+
+- `voice/` — **y70-voice.exe** (C#, .NET 8): SAPI listens for the name all day
+  (grammar: the name, optionally followed by dictation, against a full dictation
+  "garbage" grammar so ordinary speech does not match); the WinRT recognizer
+  hears requests online, SAPI dictation offline; WinRT synthesises speech; and a
+  foreground-fullscreen probe reports games. Rebuild with
+  `cd voice && dotnet publish -c Release -o bin/out`.
+- `assistant.js` — the loop. Conversations are stored as Claude content blocks
+  and translated for llama-server's OpenAI endpoint, so either brain can pick a
+  conversation up. Tools that touch the PC run on the server (search, weather,
+  volume, Discord, notes, memory); tools that touch the panel (timers, alarms,
+  music, showing cards, opening apps) are handed to the panel, which runs them
+  and posts the results back. The local model gets the ten core tools — small
+  models choose far more reliably from a short list. Two web searches per
+  question at most, and the last step runs with tools off, so every turn ends
+  in an answer.
+- `assistant-web.js` + `search-ddgs.py` — key-less search. The `ddgs` Python
+  library goes first when it is installed: it impersonates a real browser, and
+  every plain scripted request gets challenged (DuckDuckGo) or fed junk (Bing
+  matched only the first word of "how tall is mount bachelor"). Fallbacks: Bing
+  News RSS for current events, Bing, DuckDuckGo, Wikipedia — and every result
+  must mention most of the question's key words to be kept.
+- `jarvis.js` / `jarvis.css` — the status bar, the island, alarms and timers,
+  Jarvis's card and settings. Timers are stored exactly as the Timer widget
+  stores them, so the two stay in step; the island does the ringing.
+
 ## V2: a window that doesn't steal focus
 
 In V1 the dashboard was a Brave window. Every tap **activated** that window:
@@ -771,7 +855,12 @@ wscript "autostart-hidden.vbs" 0
 | File | Purpose |
 |------|---------|
 | `config.js`  | Your Client ID + settings |
-| `server.js`  | Zero-dependency static server on `127.0.0.1:8888` |
+| `server.js`  | Static server + APIs on `127.0.0.1:8888` (the Jarvis fork adds the Anthropic SDK: `npm install` at the root) |
+| `assistant.js` | Jarvis: settings, the voice helper, both brains, tools, conversations |
+| `assistant-web.js` | Jarvis's key-less search, images, page reading, weather |
+| `search-ddgs.py` | Search through the `ddgs` Python library when it is installed |
+| `jarvis.js` / `jarvis.css` | Status bar, the island, alarms + timers, Jarvis's card and settings |
+| `voice/Program.cs` | Voice helper — wake word, online/offline dictation, voices, game probe |
 | `index.html` | UI layout |
 | `styles.css` | Touch/dark styling tuned for the tall Y70 display |
 | `app.js`     | Auth, Web Playback SDK, API calls, rendering |
@@ -784,6 +873,7 @@ wscript "autostart-hidden.vbs" 0
 | `discord-app.json` | Your Discord client id + secret (never served) |
 | `v2/main.js` | V2 native shell — the non-activating window |
 | `v2/preload.js` | Bridge exposing keyboard mode to the pages |
+| `v2/forks.js` | The forks the drawer can switch between |
 | `launch-v2.bat` | Starts V2 (prefers the built app) |
 | `v2/build/icon.ico` | App icon, generated by a script rather than shipped as a blob |
 | `notes.txt` | The notes widget's store (never served over HTTP) |

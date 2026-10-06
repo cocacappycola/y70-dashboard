@@ -1,0 +1,1093 @@
+// ============================================================================
+//  Jarvis — the assistant's server side.
+//
+//    /api/jarvis/events     SSE: wake word, live transcript, game state, status
+//    /api/jarvis/turn       one exchange, streamed back as NDJSON
+//    /api/jarvis/listen     start hearing a request (cancel to stop)
+//    /api/jarvis/tts        text -> WAV in the chosen Windows voice
+//    /api/jarvis/settings   GET / POST the settings
+//    /api/jarvis/key        POST an Anthropic API key (never read back)
+//    /api/jarvis/memory     GET / POST remembered facts
+//    /api/jarvis/history    recent exchanges
+//    /api/jarvis/local      local model: status, start, stop, edit
+//
+//  Two brains, one loop. Claude goes through the Anthropic SDK; the local model
+//  is llama-server in router mode (jarvis-llm.bat), spoken to through its
+//  OpenAI-compatible endpoint. Conversations are stored in Claude's content
+//  block shape and translated for the local model, so a conversation can move
+//  between them.
+//
+//  Tools run where their effect is. Search, weather, volume, Discord, notes and
+//  memory run here. Music, timers, alarms, opening apps and putting things on
+//  screen run in the panel: the stream stops with a "client" event, the panel
+//  does the work and posts the results back, and the loop carries on.
+// ============================================================================
+const fs = require("fs");
+const path = require("path");
+const { spawn, execFile } = require("child_process");
+const web = require("./assistant-web");
+const discord = require("./discord");
+
+let Anthropic = null;
+try { Anthropic = require("@anthropic-ai/sdk"); Anthropic = Anthropic.default || Anthropic; }
+catch (e) { /* reported as a status; Jarvis still works on the local model */ }
+
+let H = null;          // what server.js hands over: paths, helpers, the key
+let settings = null;
+
+// ---------------------------------------------------------------- settings --
+const DEFAULTS = {
+  provider: "auto",                 // claude | local | auto (local when it is up)
+  claudeModel: "claude-haiku-4-5",
+  localUrl: "http://127.0.0.1:8081",
+  localModel: "jarvis-9b",          // jarvis-9b | jarvis-4b
+  autoGameModel: true,              // use the 4B while a game is in front
+  localBat: "",                     // jarvis-llm.bat, so the panel can start it
+  wake: true,
+  wakePhrase: "jarvis",
+  sensitivity: 0.5,
+  onlineSpeech: true,               // Windows online recognizer, offline fallback
+  speak: true,
+  voice: "Microsoft Mark",
+  rate: 1.05,
+  name: "",
+  addressAs: "",
+  about: "",
+  home: null,                       // { name, lat, lon }
+  graphFile: "",                    // an MCP memory knowledge graph (JSONL)
+  useGraph: true,
+};
+const CLAUDE_MODELS = ["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"];
+const LOCAL_MODELS = ["jarvis-9b", "jarvis-4b"];
+
+function settingsFile() { return H.stateFile("jarvis.json"); }
+
+function loadSettings() {
+  try { settings = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsFile(), "utf8")) }; }
+  catch (e) { settings = { ...DEFAULTS }; }
+}
+
+function saveSettings(patch) {
+  const next = { ...settings };
+  for (const [k, v] of Object.entries(patch || {})) {
+    if (!(k in DEFAULTS)) continue;
+    next[k] = v;
+  }
+  if (!["claude", "local", "auto"].includes(next.provider)) next.provider = DEFAULTS.provider;
+  if (!CLAUDE_MODELS.includes(next.claudeModel)) next.claudeModel = DEFAULTS.claudeModel;
+  if (!LOCAL_MODELS.includes(next.localModel)) next.localModel = DEFAULTS.localModel;
+  next.sensitivity = Math.max(0, Math.min(1, Number(next.sensitivity) || 0.5));
+  next.rate = Math.max(0.6, Math.min(2, Number(next.rate) || 1));
+  next.wakePhrase = String(next.wakePhrase || "jarvis").trim().toLowerCase().slice(0, 30) || "jarvis";
+  for (const k of ["name", "addressAs", "voice", "localBat", "graphFile", "localUrl"]) next[k] = String(next[k] || "").slice(0, 400);
+  next.about = String(next.about || "").slice(0, 4000);
+  settings = next;
+  try { fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2)); } catch (e) { return e.message; }
+  applyVoiceSettings();
+  return null;
+}
+
+// ------------------------------------------------------------------- events --
+// The panel holds one EventSource open; everything that happens without being
+// asked (the wake word, a game starting) arrives this way.
+const listeners = new Set();
+function broadcast(ev) {
+  const line = "data: " + JSON.stringify(ev) + "\n\n";
+  for (const res of listeners) { try { res.write(line); } catch (e) {} }
+}
+
+function handleEvents(req, res) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.write("retry: 2000\n\n");
+  listeners.add(res);
+  res.write("data: " + JSON.stringify({ type: "hello", status: status() }) + "\n\n");
+  const ping = setInterval(() => { try { res.write(": ping\n\n"); } catch (e) {} }, 20000);
+  req.on("close", () => { clearInterval(ping); listeners.delete(res); });
+  voiceStart();
+}
+
+// -------------------------------------------------------------------- voice --
+// y70-voice.exe: the wake word, hearing a request, the voices. See voice/.
+const voice = {
+  proc: null, buf: "", err: null, ready: false,
+  voices: [], offline: false,
+  onlineBlocked: false,            // Windows refused online speech (privacy switch)
+  listening: false, engine: null,
+  seq: 0, ttsWaiters: new Map(),
+};
+const game = { on: false, exe: null };
+
+function voiceExe() {
+  return path.join(H.ROOT, "voice", "bin", "out", "y70-voice.exe");
+}
+
+function voiceSend(obj) {
+  if (!voice.proc) return false;
+  try { voice.proc.stdin.write(JSON.stringify(obj) + "\n"); return true; } catch (e) { return false; }
+}
+
+function voiceStart() {
+  if (voice.proc) return true;
+  if (process.platform !== "win32") { voice.err = "Windows only."; return false; }
+  if (!fs.existsSync(voiceExe())) { voice.err = "The voice helper is not built (voice/bin/out/y70-voice.exe)."; return false; }
+  voice.err = null;
+  const child = spawn(voiceExe(), ["--parent=" + process.pid], { cwd: H.ROOT, windowsHide: true });
+  voice.proc = child;
+  child.stdout.on("data", (d) => {
+    voice.buf += d.toString();
+    let i;
+    while ((i = voice.buf.indexOf("\n")) >= 0) {
+      const line = voice.buf.slice(0, i).trim();
+      voice.buf = voice.buf.slice(i + 1);
+      if (!line) continue;
+      let m;
+      try { m = JSON.parse(line); } catch (e) { continue; }
+      onVoice(m);
+    }
+    if (voice.buf.length > 8e6) voice.buf = "";
+  });
+  child.stderr.on("data", (d) => { voice.err = String(d).slice(0, 300).trim() || voice.err; });
+  child.on("error", (e) => { voice.err = e.message; voice.proc = null; });
+  child.on("exit", () => {
+    voice.proc = null; voice.ready = false; voice.listening = false; voice.buf = "";
+    for (const [, w] of voice.ttsWaiters) w({ error: "voice helper exited" });
+    voice.ttsWaiters.clear();
+    broadcast({ type: "status", status: status() });
+    // It is meant to be resident while the wake word is on; come back.
+    if (settings.wake && listeners.size) setTimeout(voiceStart, 3000);
+  });
+  return true;
+}
+
+function applyVoiceSettings() {
+  if (!voice.proc || !voice.ready) return;
+  voiceSend({ cmd: "wake", on: !!settings.wake, phrase: settings.wakePhrase, sensitivity: settings.sensitivity });
+  voiceSend({ cmd: "game", on: !!settings.autoGameModel });
+}
+
+function onVoice(m) {
+  switch (m.type) {
+    case "ready":
+      voice.ready = true;
+      voice.offline = !!m.offline;
+      voice.voices = Array.isArray(m.voices) ? m.voices : [];
+      applyVoiceSettings();
+      broadcast({ type: "status", status: status() });
+      return;
+    case "tts": {
+      const w = voice.ttsWaiters.get(m.id);
+      if (w) { voice.ttsWaiters.delete(m.id); w(m); }
+      return;
+    }
+    case "listening":
+      voice.listening = true; voice.engine = m.engine;
+      break;
+    case "final":
+      voice.listening = false;
+      if (m.engine === "online") voice.onlineBlocked = false;
+      break;
+    case "online-unavailable":
+      voice.onlineBlocked = true;
+      break;
+    case "game":
+      game.on = !!m.on; game.exe = m.exe || null;
+      onGameChange();
+      break;
+    case "error":
+      voice.err = m.error;
+      break;
+    default: break;
+  }
+  broadcast(m);
+}
+
+function speak(text) {
+  return new Promise((resolve) => {
+    if (!voiceStart()) return resolve({ error: voice.err || "no voice helper" });
+    const id = ++voice.seq;
+    const timer = setTimeout(() => { voice.ttsWaiters.delete(id); resolve({ error: "timed out" }); }, 15000);
+    voice.ttsWaiters.set(id, (m) => { clearTimeout(timer); resolve(m); });
+    const send = () => voiceSend({ cmd: "speak", id, text: String(text).slice(0, 2000), voice: settings.voice, rate: settings.rate });
+    if (voice.ready) send();
+    else {
+      // First use: the helper is still starting. Give it a moment.
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        if (voice.ready) { clearInterval(iv); send(); }
+        else if (Date.now() - t0 > 8000) { clearInterval(iv); }
+      }, 100);
+    }
+  });
+}
+
+// ------------------------------------------------------------------ status --
+function status() {
+  return {
+    sdk: !!Anthropic,
+    hasKey: !!H.readClaudeKey(),
+    voice: {
+      running: !!voice.proc, ready: voice.ready, error: voice.err,
+      offline: voice.offline, onlineBlocked: voice.onlineBlocked,
+      listening: voice.listening, voices: voice.voices,
+    },
+    game,
+    local: { up: local.up, checkedAt: local.checkedAt, model: localModelNow(), loaded: local.loaded },
+  };
+}
+
+// -------------------------------------------------------------- local model --
+const local = { up: false, checkedAt: 0, loaded: null };
+
+async function localProbe(force) {
+  if (!force && Date.now() - local.checkedAt < 8000) return local.up;
+  local.checkedAt = Date.now();
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 1200);
+    const r = await fetch(settings.localUrl.replace(/\/+$/, "") + "/v1/models", { signal: ctl.signal });
+    clearTimeout(t);
+    const j = await r.json();
+    local.up = r.ok;
+    const loaded = (j.data || []).find((m) => m.status && m.status.value === "loaded");
+    local.loaded = loaded ? loaded.id : null;
+  } catch (e) {
+    local.up = false;
+    local.loaded = null;
+  }
+  return local.up;
+}
+
+function localModelNow() {
+  return settings.autoGameModel && game.on ? "jarvis-4b" : settings.localModel;
+}
+
+// A game just came to the front. If the big model is sitting in VRAM, hand it
+// back now rather than at the next question.
+async function onGameChange() {
+  broadcast({ type: "status", status: status() });
+  if (!settings.autoGameModel || !game.on) return;
+  if (!(await localProbe(true))) return;
+  if (local.loaded && local.loaded !== "jarvis-4b") {
+    try {
+      await fetch(settings.localUrl.replace(/\/+$/, "") + "/models/unload", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: local.loaded }),
+      });
+      local.loaded = null;
+    } catch (e) { /* the router unloads on idle anyway */ }
+  }
+}
+
+function localStart() {
+  const bat = settings.localBat;
+  if (!bat) return { ok: false, error: "Set the path to jarvis-llm.bat first." };
+  if (!fs.existsSync(bat)) return { ok: false, error: "Can't find " + bat };
+  // Its own minimised console, like your other model bats, so its log is there
+  // to read and closing that window stops it.
+  const child = spawn("cmd.exe", ["/c", "start", "\"Jarvis llama-server\"", "/min", "cmd", "/c", "\"" + bat + "\""], {
+    cwd: path.dirname(bat), detached: true, stdio: "ignore", windowsVerbatimArguments: true,
+  });
+  child.unref();
+  local.checkedAt = 0;
+  return { ok: true };
+}
+
+// Stops the router (and the model processes it spawned). The console the bat
+// opened is only closed when it really is running jarvis-llm.bat.
+function localStop() {
+  return new Promise((resolve) => {
+    const port = (settings.localUrl.match(/:(\d+)/) || [])[1] || "8081";
+    const ps =
+      "$c = Get-NetTCPConnection -LocalPort " + Number(port) + " -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1;" +
+      "if (-not $c) { 'none'; exit }" +
+      "$p = Get-CimInstance Win32_Process -Filter \"ProcessId=$($c.OwningProcess)\";" +
+      "$q = Get-CimInstance Win32_Process -Filter \"ProcessId=$($p.ParentProcessId)\";" +
+      "$target = $p.ProcessId;" +
+      "if ($q -and $q.Name -eq 'cmd.exe' -and $q.CommandLine -like ('*jarvis-ll' + 'm.bat*')) { $target = $q.ProcessId }" +
+      "taskkill /PID $target /T /F | Out-Null; 'stopped'";
+    execFile("powershell.exe", ["-NoProfile", "-Command", ps], { windowsHide: true, timeout: 15000 }, (err, out) => {
+      local.checkedAt = 0;
+      local.up = false;
+      if (err) return resolve({ ok: false, error: err.message });
+      resolve({ ok: true, result: String(out).trim() });
+    });
+  });
+}
+
+function localEdit() {
+  const bat = settings.localBat;
+  if (!bat || !fs.existsSync(bat)) return { ok: false, error: "Set the path to jarvis-llm.bat first." };
+  const files = [bat];
+  const ini = path.join(path.dirname(bat), "jarvis-models.ini");
+  if (fs.existsSync(ini)) files.push(ini);
+  for (const f of files) spawn("notepad.exe", [f], { detached: true, stdio: "ignore" }).unref();
+  return { ok: true, opened: files };
+}
+
+// ------------------------------------------------------------------ memory --
+// Jarvis's own facts live in jarvis-memory.json. A knowledge graph from the MCP
+// memory server (the one your llama web UI writes) can be read as well, so
+// both assistants know the same things about you.
+function memoryFile() { return H.stateFile("jarvis-memory.json"); }
+function loadFacts() {
+  try { const j = JSON.parse(fs.readFileSync(memoryFile(), "utf8")); return Array.isArray(j.facts) ? j.facts : []; }
+  catch (e) { return []; }
+}
+function saveFacts(facts) {
+  fs.writeFileSync(memoryFile(), JSON.stringify({ facts }, null, 2));
+}
+function remember(text) {
+  const t = String(text || "").trim().slice(0, 500);
+  if (!t) return { ok: false, error: "nothing to remember" };
+  const facts = loadFacts();
+  if (facts.some((f) => f.text.toLowerCase() === t.toLowerCase())) return { ok: true, already: true };
+  facts.push({ id: "m" + Date.now().toString(36), text: t, at: new Date().toISOString().slice(0, 10) });
+  saveFacts(facts);
+  return { ok: true, saved: t, count: facts.length };
+}
+function forget(text) {
+  const t = String(text || "").trim().toLowerCase();
+  const facts = loadFacts();
+  const keep = facts.filter((f) => !(t && (f.text.toLowerCase().includes(t) || f.id === text)));
+  saveFacts(keep);
+  return { ok: true, removed: facts.length - keep.length };
+}
+
+let graphCache = { file: "", mtime: 0, text: "" };
+function graphSummary() {
+  const file = settings.useGraph && settings.graphFile;
+  if (!file) return "";
+  try {
+    const st = fs.statSync(file);
+    if (graphCache.file === file && graphCache.mtime === st.mtimeMs) return graphCache.text;
+    const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean);
+    const ents = [], rels = [];
+    for (const l of lines) {
+      let o; try { o = JSON.parse(l); } catch (e) { continue; }
+      if (o.type === "entity") ents.push("- " + o.name + " (" + o.entityType + "): " + (o.observations || []).join("; "));
+      else if (o.type === "relation") rels.push("- " + o.from + " " + o.relationType + " " + o.to);
+    }
+    let text = ents.join("\n") + (rels.length ? "\nRelations:\n" + rels.join("\n") : "");
+    if (text.length > 6000) text = text.slice(0, 6000) + "\n(...)";
+    graphCache = { file, mtime: st.mtimeMs, text };
+    return text;
+  } catch (e) { return ""; }
+}
+
+// ------------------------------------------------------------------- tools --
+// `core` marks the set the local model gets: small models pick tools far more
+// reliably from a short list.
+const TOOLS = [
+  {
+    name: "web_search", where: "server", core: true,
+    description: "Search the web, like Google. Returns titles, links and snippets, and shows them on screen. Use it for anything current or anything you are not sure of.",
+    input_schema: { type: "object", properties: { query: { type: "string" }, count: { type: "integer", description: "How many results, 1-8. Default 5." } }, required: ["query"] },
+  },
+  {
+    name: "read_page", where: "server", core: true,
+    description: "Fetch a web page and return its readable text, to answer from or to summarise. Use a link from search results or one the user gave.",
+    input_schema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+  },
+  {
+    name: "image_search", where: "server", core: true,
+    description: "Find pictures and show them on screen. Use it whenever the user wants to see what something looks like.",
+    input_schema: { type: "object", properties: { query: { type: "string" }, count: { type: "integer" } }, required: ["query"] },
+  },
+  {
+    name: "weather", where: "server", core: true,
+    description: "Current conditions and the forecast, shown on screen. Leave place empty for home. Each forecast day is labelled today, tomorrow or a weekday.",
+    input_schema: { type: "object", properties: { place: { type: "string" }, days: { type: "integer", description: "How many days of forecast, 3-7. Default 3." } } },
+  },
+  {
+    name: "music", where: "client", core: true,
+    description: "Music. action=play with a query finds it on Spotify and plays it (kind: track, album, artist or playlist; 'liked songs' plays the user's Liked Songs). pause, resume, next and previous control whatever is playing on the PC. now_playing says what is on.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["play", "pause", "resume", "next", "previous", "now_playing"] },
+        query: { type: "string" },
+        kind: { type: "string", enum: ["track", "album", "artist", "playlist"] },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "volume", where: "server", core: true,
+    description: "PC output volume. set takes level 0-100; up and down step by 10 unless amount is given; mute and unmute.",
+    input_schema: {
+      type: "object",
+      properties: { action: { type: "string", enum: ["set", "up", "down", "mute", "unmute"] }, level: { type: "integer" }, amount: { type: "integer" } },
+      required: ["action"],
+    },
+  },
+  {
+    name: "timer", where: "client", core: true,
+    description: "Countdown timers, shown in the top bar. set needs seconds and takes an optional label; cancel takes a label, or cancels all without one; list returns them.",
+    input_schema: {
+      type: "object",
+      properties: { action: { type: "string", enum: ["set", "cancel", "list"] }, seconds: { type: "integer" }, label: { type: "string" } },
+      required: ["action"],
+    },
+  },
+  {
+    name: "alarm", where: "client", core: true,
+    description: "Alarms. set needs time as 24-hour HH:MM and takes an optional label and days (\"weekdays\", \"weekends\", \"daily\" or day names like \"mon\"); with no days it rings once, at the next occurrence. cancel by time or label, or all; list returns them.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["set", "cancel", "list"] },
+        time: { type: "string", description: "HH:MM, 24-hour" },
+        label: { type: "string" },
+        days: { type: "array", items: { type: "string" } },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "show", where: "client", core: true,
+    description: "Put something on the screen as a titled list of cards: steps, lists, comparisons, anything easier to read than to hear. Say one short line instead of reading it all out.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { title: { type: "string" }, text: { type: "string" }, image: { type: "string" }, url: { type: "string" } },
+          },
+        },
+      },
+      required: ["title", "items"],
+    },
+  },
+  {
+    name: "remember", where: "server", core: true,
+    description: "Save a fact about the user for future conversations: preferences, people, plans, routines. With forget=true, removes saved facts containing the text instead.",
+    input_schema: { type: "object", properties: { fact: { type: "string" }, forget: { type: "boolean" } }, required: ["fact"] },
+  },
+  {
+    name: "open_app", where: "client", core: false,
+    description: "Bring one of the panel's apps to the front.",
+    input_schema: { type: "object", properties: { app: { type: "string", enum: ["spotify", "weather", "youtube", "shorts", "tiktok", "snapchat"] } }, required: ["app"] },
+  },
+  {
+    name: "discord", where: "server", core: false,
+    description: "Discord voice: mute or unmute the microphone, deafen or undeafen.",
+    input_schema: { type: "object", properties: { action: { type: "string", enum: ["mute", "unmute", "deafen", "undeafen"] } }, required: ["action"] },
+  },
+  {
+    name: "notes", where: "server", core: false,
+    description: "The Notes widget: read it, or append a line to it.",
+    input_schema: { type: "object", properties: { action: { type: "string", enum: ["read", "append"] }, text: { type: "string" } }, required: ["action"] },
+  },
+  {
+    name: "pc_status", where: "server", core: false,
+    description: "How the PC is doing right now: CPU, GPU, memory, temperatures, network.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "phone", where: "server", core: false,
+    description: "The user's iPhone: recent notifications and battery level.",
+    input_schema: { type: "object", properties: {} },
+  },
+];
+const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
+
+function claudeTools() {
+  return TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
+}
+function openaiTools() {
+  return TOOLS.filter((t) => t.core).map((t) => ({
+    type: "function",
+    function: { name: t.name, description: t.description, parameters: t.input_schema },
+  }));
+}
+
+async function selfGet(p) {
+  const r = await fetch("http://127.0.0.1:" + H.PORT + p);
+  return r.json();
+}
+
+// Runs a server-side tool. Returns [resultForModel, isError]. `emit` puts
+// cards on the panel while it works.
+async function runServerTool(name, input, emit) {
+  const a = input || {};
+  switch (name) {
+    case "web_search": {
+      const r = await web.webSearch(a.query, Math.min(8, a.count || 5));
+      if (!r.ok) return [r.error, true];
+      emit({ type: "card", card: { kind: "results", query: r.query, items: r.results } });
+      return [JSON.stringify(r.results.map((x, i) => ({ n: i + 1, title: x.title, url: x.url, snippet: x.snippet })))];
+    }
+    case "read_page": {
+      const r = await web.readPage(a.url, 9000);
+      if (!r.ok) return [r.error, true];
+      emit({ type: "card", card: { kind: "page", title: r.title, url: r.url, image: r.image } });
+      return [(r.title ? "# " + r.title + "\n" : "") + r.text + (r.truncated ? "\n(truncated)" : "")];
+    }
+    case "image_search": {
+      const r = await web.imageSearch(a.query, Math.min(12, a.count || 6));
+      if (!r.ok) return [r.error, true];
+      emit({ type: "card", card: { kind: "images", query: r.query, items: r.images } });
+      return ["Showing " + r.images.length + " images of " + r.query + " on screen: " +
+        r.images.map((x) => x.title).filter(Boolean).slice(0, 6).join(" | ")];
+    }
+    case "weather": {
+      const r = await web.weather(a.place, a.days, settings.home);
+      if (!r.ok) return [r.error, true];
+      emit({ type: "card", card: { kind: "weather", data: r } });
+      return [JSON.stringify(r)];
+    }
+    case "volume": {
+      const st = H.sysState();
+      const out = st && st.audio && (st.audio.outputs || []).find((d) => d.default);
+      const cur = out ? Math.round((out.volume || 0) * 100) : 50;
+      let level = cur;
+      if (a.action === "mute" || a.action === "unmute") {
+        const m = await H.sysSend("audio.setMute", { mute: a.action === "mute" });
+        return m.ok ? [a.action === "mute" ? "muted" : "unmuted"] : [m.error || "failed", true];
+      }
+      if (a.action === "set") level = Number(a.level);
+      if (a.action === "up") level = cur + (Number(a.amount) || 10);
+      if (a.action === "down") level = cur - (Number(a.amount) || 10);
+      if (!Number.isFinite(level)) return ["level needed", true];
+      level = Math.max(0, Math.min(100, Math.round(level)));
+      const m = await H.sysSend("audio.setVolume", { level: level / 100 });
+      if (m.ok && out && out.muted && level > 0) await H.sysSend("audio.setMute", { mute: false });
+      return m.ok ? ["volume " + cur + " -> " + level] : [m.error || "failed", true];
+    }
+    case "remember": {
+      const r = a.forget ? forget(a.fact) : remember(a.fact);
+      emit({ type: "memory" });
+      return [JSON.stringify(r), !r.ok];
+    }
+    case "discord": {
+      const map = { mute: ["setMute", true], unmute: ["setMute", false], deafen: ["setDeaf", true], undeafen: ["setDeaf", false] };
+      const m = map[a.action];
+      if (!m) return ["unknown action", true];
+      const r = await discord.action(m[0], { value: m[1] });
+      return r.ok ? ["done: " + JSON.stringify(r.voice || {})] : [r.error || "Discord isn't connected", true];
+    }
+    case "notes": {
+      const file = H.stateFile("notes.txt");
+      let text = "";
+      try { text = fs.readFileSync(file, "utf8"); } catch (e) {}
+      if (a.action === "append") {
+        const add = String(a.text || "").trim();
+        if (!add) return ["nothing to add", true];
+        text = text.replace(/\s*$/, "") + (text.trim() ? "\n" : "") + add + "\n";
+        fs.writeFileSync(file, text, "utf8");
+        emit({ type: "notes" });
+        return ["added"];
+      }
+      return [text.trim() ? text.slice(-6000) : "(the notes are empty)"];
+    }
+    case "pc_status": {
+      let s = await selfGet("/api/pcstats");
+      if (s.warming) { await new Promise((r) => setTimeout(r, 2600)); s = await selfGet("/api/pcstats"); }
+      return [JSON.stringify({
+        cpuPct: s.cpu && s.cpu.pct, cpuTempC: s.cpu && s.cpu.tempC, ram: s.ram,
+        gpu: s.gpu, netDownBps: s.net && s.net.downBps, netUpBps: s.net && s.net.upBps,
+        busiest: (s.busiest || []).slice(0, 5),
+      })];
+    }
+    case "phone": {
+      const s = await selfGet("/api/phone");
+      return [JSON.stringify({
+        connected: s.connected, battery: s.battery,
+        notifications: (s.notifications || []).slice(0, 10).map((n) => ({ app: n.app, title: n.title, message: n.message, at: n.date })),
+      })];
+    }
+    default:
+      return ["unknown tool " + name, true];
+  }
+}
+
+// ----------------------------------------------------------- system prompt --
+function who() { return settings.name || "the user"; }
+
+function systemPrompt(forLocal) {
+  const addr = settings.addressAs ? "Address them as \"" + settings.addressAs + "\"." : "";
+  const facts = loadFacts();
+  const graph = graphSummary();
+  const parts = [
+    "You are Jarvis, " + who() + "'s personal assistant. You live on the small HYTE Y70 Touch screen beside their main monitor, built into their dashboard. " + addr,
+    "",
+    "How you talk:",
+    "- Your replies are spoken aloud, so keep them short: one to three sentences unless asked for more. No markdown, no lists, no emoji, never read out a URL.",
+    "- Dry, warm and quick. A little wit is welcome; waffle is not.",
+    "- When something is on screen (search results, pictures, weather, a show card), say one line about it instead of reading it out.",
+    "- Fahrenheit, miles, and the 12-hour clock.",
+    "",
+    "How you act:",
+    "- Use tools for anything that touches the world: music, volume, timers, alarms, weather, search, Discord, notes.",
+    "- For news, prices, scores, anything current or anything you are not sure of, search first and answer from what you found. Do not guess.",
+    "- One search is usually enough, two at most. Then answer from what you found, even if it is partial.",
+    "- To summarise an article or page, read_page it first. \"Show me\" means put it on screen.",
+    "- Just do things. Only ask when a request is genuinely ambiguous.",
+    "- If a tool fails, say so in a few words.",
+    "- Requests come through speech recognition and may be misheard (\"place on low fi beads\" means \"play some lo-fi beats\"). Interpret them charitably.",
+    "- " + who() + " may be in the middle of a game. Be brief.",
+    "- Each request starts with a bracketed line of background (the time, what is playing). Use it when it helps; never remark on it otherwise.",
+  ];
+  if (settings.about) parts.push("", "About " + who() + ":", settings.about);
+  if (facts.length) parts.push("", "Things you have been asked to remember:", facts.map((f) => "- " + f.text).join("\n"));
+  if (graph && !forLocal) parts.push("", "What " + who() + "'s memory graph knows (shared with their other assistant):", graph);
+  else if (graph) parts.push("", "From " + who() + "'s memory graph:", graph.slice(0, 2500));
+  return parts.join("\n");
+}
+
+// What changes every turn goes in the user message, not the system prompt, so
+// the cached prefix (tools + system) stays byte-identical between requests.
+function contextLine(ctx) {
+  const now = new Date();
+  const when = now.toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  const bits = ["It is " + when + "."];
+  if (ctx && ctx.playing) bits.push("Playing: " + ctx.playing + ".");
+  if (game.on) bits.push("A game is in front (" + (game.exe || "fullscreen") + ").");
+  if (ctx && ctx.timers) bits.push("Timers: " + ctx.timers + ".");
+  return "[" + bits.join(" ") + "]";
+}
+
+// ---------------------------------------------------------------- providers --
+let client = null, clientKey = null;
+function claudeClient() {
+  const key = H.readClaudeKey();
+  if (!key) return null;
+  if (!client || clientKey !== key) { client = new Anthropic({ apiKey: key }); clientKey = key; }
+  return client;
+}
+
+class UserFacing extends Error {}
+
+async function claudeStep(conv, emit, signal, noTools) {
+  if (!Anthropic) throw new UserFacing("The Anthropic SDK is missing from this build.");
+  const c = claudeClient();
+  if (!c) throw new UserFacing("There's no Claude API key yet. Add one in Jarvis settings.");
+  const model = settings.claudeModel;
+  const params = {
+    model,
+    max_tokens: 4096,
+    system: [{ type: "text", text: systemPrompt(false), cache_control: { type: "ephemeral" } }],
+    tools: claudeTools(),
+    messages: conv.messages,
+  };
+  // The history holds tool calls, so the tools must stay declared; "none"
+  // just stops new ones.
+  if (noTools) params.tool_choice = { type: "none" };
+  let stream;
+  if (model === "claude-haiku-4-5") {
+    stream = c.messages.stream(params, { signal });
+  } else {
+    // Sonnet 5.5 and Opus 5.5 think by default; low effort keeps a spoken
+    // answer quick. A safety decline is re-served by the fallback model.
+    stream = c.beta.messages.stream({
+      ...params,
+      output_config: { effort: "low" },
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+    }, { signal });
+  }
+  stream.on("text", (delta) => emit({ type: "text", delta }));
+  try {
+    const msg = await stream.finalMessage();
+    return { content: msg.content, stop: msg.stop_reason, model: msg.model, usage: msg.usage };
+  } catch (e) {
+    if (e instanceof Anthropic.AuthenticationError) throw new UserFacing("Claude rejected the API key. Check it in Jarvis settings.");
+    if (e instanceof Anthropic.RateLimitError) throw new UserFacing("Claude is rate limiting me. Try again in a moment.");
+    if (e instanceof Anthropic.APIConnectionError) throw new UserFacing("I can't reach Claude right now.");
+    if (e instanceof Anthropic.APIError) throw new UserFacing("Claude returned an error (" + (e.status || "?") + ").");
+    throw e;
+  }
+}
+
+// Claude content blocks -> OpenAI chat messages for llama-server.
+function toOpenAI(system, messages) {
+  const out = [{ role: "system", content: system }];
+  for (const m of messages) {
+    const blocks = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content;
+    if (m.role === "user") {
+      const results = blocks.filter((b) => b.type === "tool_result");
+      for (const r of results) {
+        const content = typeof r.content === "string" ? r.content
+          : (r.content || []).map((x) => x.text || "").join("\n");
+        out.push({ role: "tool", tool_call_id: r.tool_use_id, content: (r.is_error ? "ERROR: " : "") + content });
+      }
+      const text = blocks.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+      if (text) out.push({ role: "user", content: text });
+    } else {
+      const text = blocks.filter((b) => b.type === "text").map((b) => b.text).join("");
+      const calls = blocks.filter((b) => b.type === "tool_use").map((b) => ({
+        id: b.id, type: "function", function: { name: b.name, arguments: JSON.stringify(b.input || {}) },
+      }));
+      const msg = { role: "assistant", content: text || "" };
+      if (calls.length) msg.tool_calls = calls;
+      out.push(msg);
+    }
+  }
+  return out;
+}
+
+async function localStep(conv, emit, signal, noTools) {
+  const base = settings.localUrl.replace(/\/+$/, "");
+  const model = localModelNow();
+  if (local.loaded !== model) emit({ type: "status", text: "Waking the local model…" });
+  let res;
+  try {
+    res = await fetch(base + "/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model,
+        stream: true,
+        max_tokens: 1500,
+        messages: toOpenAI(systemPrompt(true), conv.messages),
+        tools: openaiTools(),
+        tool_choice: noTools ? "none" : "auto",
+        chat_template_kwargs: { enable_thinking: false },
+      }),
+    });
+  } catch (e) {
+    if (e.name === "AbortError") throw e;
+    local.up = false;
+    throw new UserFacing("The local model isn't running.");
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new UserFacing("The local model returned an error (" + res.status + "). " + t.slice(0, 120));
+  }
+  local.loaded = model;
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", text = "", finish = null;
+  const calls = [];
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") continue;
+      let j;
+      try { j = JSON.parse(data); } catch (e) { continue; }
+      if (j.error) throw new UserFacing("Local model error: " + (j.error.message || "unknown"));
+      const ch = j.choices && j.choices[0];
+      if (!ch) continue;
+      const d = ch.delta || {};
+      if (d.content) { text += d.content; emit({ type: "text", delta: d.content }); }
+      for (const tc of d.tool_calls || []) {
+        const c = calls[tc.index] || (calls[tc.index] = { id: "", name: "", args: "" });
+        if (tc.id) c.id = tc.id;
+        if (tc.function && tc.function.name) c.name += tc.function.name;
+        if (tc.function && tc.function.arguments) c.args += tc.function.arguments;
+      }
+      if (ch.finish_reason) finish = ch.finish_reason;
+    }
+  }
+  const content = [];
+  if (text) content.push({ type: "text", text });
+  for (const c of calls.filter(Boolean)) {
+    let input = {};
+    try { input = c.args ? JSON.parse(c.args) : {}; } catch (e) { input = { _unparsed: c.args }; }
+    content.push({ type: "tool_use", id: c.id || "call_" + Math.random().toString(36).slice(2, 10), name: c.name, input });
+  }
+  const stop = content.some((b) => b.type === "tool_use") ? "tool_use" : (finish === "length" ? "max_tokens" : "end_turn");
+  return { content, stop, model };
+}
+
+async function chooseProvider() {
+  const hasKey = !!H.readClaudeKey() && !!Anthropic;
+  if (settings.provider === "claude") return "claude";
+  if (settings.provider === "local") return "local";
+  const up = await localProbe(false);
+  if (up) return "local";
+  return hasKey ? "claude" : "local";
+}
+
+// ------------------------------------------------------------ conversations --
+// A conversation ends after a few quiet minutes, the way asking Siri something
+// new starts fresh while a follow-up keeps the thread.
+const CONV_IDLE_MS = 5 * 60 * 1000;
+const convs = new Map();
+setInterval(() => {
+  for (const [id, c] of convs) if (Date.now() - c.at > CONV_IDLE_MS) convs.delete(id);
+}, 60000).unref();
+
+function newConv() {
+  const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const c = { id, messages: [], at: Date.now(), pending: null, log: null };
+  convs.set(id, c);
+  return c;
+}
+
+// History of finished exchanges, for the Jarvis panel.
+function historyFile() { return H.stateFile("jarvis-history.json"); }
+let history = null;
+function loadHistory() {
+  if (history) return history;
+  try { history = JSON.parse(fs.readFileSync(historyFile(), "utf8")); } catch (e) { history = []; }
+  if (!Array.isArray(history)) history = [];
+  return history;
+}
+function addHistory(entry) {
+  loadHistory().unshift(entry);
+  history = history.slice(0, 100);
+  try { fs.writeFileSync(historyFile(), JSON.stringify(history)); } catch (e) {}
+}
+
+// A small model asked something it cannot find will search again and again
+// with the same words (the 4B did eight in a row once). So: two searches per
+// question, after which a search answers "use what you have" — and the last
+// step runs with tools off, so every turn ends in an answer.
+const MAX_STEPS = 6;
+const MAX_SEARCHES = 2;
+
+async function runLoop(conv, emit, signal) {
+  for (let step = 0; step < MAX_STEPS; step++) {
+    const provider = conv.provider;
+    const last = step === MAX_STEPS - 1;
+    emit({ type: "thinking", provider });
+    const r = provider === "claude" ? await claudeStep(conv, emit, signal, last) : await localStep(conv, emit, signal, last);
+    conv.model = r.model;
+    conv.messages.push({ role: "assistant", content: r.content });
+    for (const b of r.content) if (b.type === "text") conv.log.reply += b.text;
+
+    if (r.stop === "refusal") {
+      const line = " I can't help with that one.";
+      conv.log.reply += line;
+      emit({ type: "text", delta: line });
+      return "end";
+    }
+    if (r.stop === "pause_turn") continue;
+    const uses = r.content.filter((b) => b.type === "tool_use");
+    if (!uses.length) return "end";
+
+    // A tool call cut off by max_tokens may carry a truncated input. Do not
+    // run it on a guess.
+    if (r.stop === "max_tokens") return "end";
+
+    const serverUses = [], clientUses = [];
+    for (const u of uses) {
+      const def = toolByName.get(u.name);
+      if (def && def.where === "client") clientUses.push(u); else serverUses.push(u);
+      conv.log.tools.push(u.name);
+    }
+    const results = await Promise.all(serverUses.map(async (u) => {
+      emit({ type: "tool", id: u.id, name: u.name, input: u.input, status: "running" });
+      let out, isErr = false;
+      try {
+        if (!toolByName.has(u.name)) [out, isErr] = ["There is no tool called " + u.name, true];
+        else if (u.name === "web_search" && ++conv.searches > MAX_SEARCHES) {
+          [out, isErr] = ["You have already searched " + MAX_SEARCHES + " times for this question. Do not search again: " +
+            "answer now from the results you have (read_page one of them if you need detail), or say you could not find it.", true];
+        }
+        else [out, isErr] = await runServerTool(u.name, u.input, emit);
+      } catch (e) { out = "Tool failed: " + e.message; isErr = true; }
+      emit({ type: "tool", id: u.id, name: u.name, status: "done", ok: !isErr });
+      return { type: "tool_result", tool_use_id: u.id, content: String(out == null ? "" : out), ...(isErr ? { is_error: true } : {}) };
+    }));
+
+    if (clientUses.length) {
+      conv.pending = { results, ids: clientUses.map((u) => u.id), order: uses.map((u) => u.id) };
+      emit({ type: "client", calls: clientUses.map((u) => ({ id: u.id, name: u.name, input: u.input })) });
+      return "client";
+    }
+    // Every result of one step goes back in a single user message.
+    conv.messages.push({ role: "user", content: results });
+  }
+  return "end";
+}
+
+function finish(conv, emit) {
+  addHistory({
+    at: Date.now(), conv: conv.id, heard: conv.log.heard, reply: conv.log.reply.trim(),
+    provider: conv.provider, model: conv.model || null, tools: conv.log.tools,
+  });
+  emit({ type: "done", conv: conv.id });
+}
+
+async function handleTurn(req, res) {
+  H.readJsonBody(req, res, async (body) => {
+    res.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache" });
+    const ctl = new AbortController();
+    let closed = false;
+    res.on("close", () => { closed = true; ctl.abort(); });
+    const emit = (ev) => { if (!closed) { try { res.write(JSON.stringify(ev) + "\n"); } catch (e) {} } };
+
+    let conv = body.conv && convs.get(body.conv);
+    try {
+      if (Array.isArray(body.results)) {
+        // The panel finished the client-side tools of a step.
+        if (!conv || !conv.pending) throw new UserFacing("That conversation has expired.");
+        const byId = new Map(conv.pending.results.map((r) => [r.tool_use_id, r]));
+        for (const r of body.results) {
+          if (!conv.pending.ids.includes(r.id)) continue;
+          byId.set(r.id, {
+            type: "tool_result", tool_use_id: r.id, content: String(r.content == null ? "" : r.content).slice(0, 20000),
+            ...(r.is_error ? { is_error: true } : {}),
+          });
+        }
+        for (const id of conv.pending.ids) {
+          if (!byId.has(id)) byId.set(id, { type: "tool_result", tool_use_id: id, content: "no result", is_error: true });
+        }
+        conv.messages.push({ role: "user", content: conv.pending.order.map((id) => byId.get(id)).filter(Boolean) });
+        conv.pending = null;
+      } else {
+        const text = String(body.text || "").trim();
+        if (!text) throw new UserFacing("I didn't catch that.");
+        if (!conv || conv.pending) conv = newConv();
+        // A provider switch mid-conversation is fine, but pick once per turn.
+        conv.provider = await chooseProvider();
+        conv.log = { heard: text, reply: "", tools: [] };
+        conv.searches = 0;
+        conv.messages.push({ role: "user", content: [{ type: "text", text: contextLine(body.context) + "\n" + text }] });
+        emit({ type: "start", conv: conv.id, provider: conv.provider, model: conv.provider === "claude" ? settings.claudeModel : localModelNow() });
+      }
+      conv.at = Date.now();
+      const outcome = await runLoop(conv, emit, ctl.signal);
+      conv.at = Date.now();
+      if (outcome === "end") finish(conv, emit);
+    } catch (e) {
+      if (e.name === "AbortError" || closed) { /* the panel went away */ }
+      else {
+        const msg = e instanceof UserFacing ? e.message : "Something went wrong: " + e.message;
+        if (!(e instanceof UserFacing)) console.error("Jarvis turn failed:", e);
+        emit({ type: "error", message: msg });
+        // Drop the unanswered user message so the next attempt starts clean.
+        if (conv && conv.messages.length && conv.messages[conv.messages.length - 1].role === "user") conv.messages.pop();
+      }
+    }
+    try { res.end(); } catch (e) {}
+  });
+}
+
+// ------------------------------------------------------------------- routes --
+function publicSettings() {
+  return { ...settings };
+}
+
+async function handle(req, res, urlPath) {
+  const json = H.json;
+  const sub = urlPath.slice("/api/jarvis/".length);
+
+  if (sub === "events") return handleEvents(req, res);
+  if (sub === "turn" && req.method === "POST") return handleTurn(req, res);
+
+  if (sub === "status") {
+    await localProbe(false);
+    return json(res, 200, { ok: true, status: status() });
+  }
+
+  if (sub === "settings") {
+    if (req.method === "GET") return json(res, 200, { ok: true, settings: publicSettings(), status: status() });
+    return H.readJsonBody(req, res, (body) => {
+      const err = saveSettings(body || {});
+      if (err) return json(res, 500, { ok: false, error: err });
+      local.checkedAt = 0;
+      broadcast({ type: "settings", settings: publicSettings() });
+      return json(res, 200, { ok: true, settings: publicSettings(), status: status() });
+    });
+  }
+
+  if (sub === "key" && req.method === "POST") {
+    return H.readJsonBody(req, res, (body) => {
+      const key = String(body.key || "").trim();
+      if (body.clear) { H.writeClaudeKey(""); client = null; return json(res, 200, { ok: true, status: status() }); }
+      if (!/^sk-ant-[A-Za-z0-9_\-]{20,}$/.test(key)) return json(res, 400, { ok: false, error: "That doesn't look like an Anthropic API key (sk-ant-...)." });
+      H.writeClaudeKey(key);
+      client = null;
+      broadcast({ type: "status", status: status() });
+      // Never echo the key back, only whether there is one.
+      return json(res, 200, { ok: true, status: status() });
+    });
+  }
+
+  if (sub === "listen" && req.method === "POST") {
+    return H.readJsonBody(req, res, (body) => {
+      if (!voiceStart() || !voice.ready) return json(res, 503, { ok: false, error: voice.err || "The voice helper is starting." });
+      const online = body.online != null ? !!body.online : !!settings.onlineSpeech;
+      voiceSend({ cmd: "listen", online, maxSeconds: 20 });
+      return json(res, 200, { ok: true, online });
+    });
+  }
+  if (sub === "cancel" && req.method === "POST") {
+    voiceSend({ cmd: "cancel" });
+    return json(res, 200, { ok: true });
+  }
+  if (sub === "speaking" && req.method === "POST") {
+    return H.readJsonBody(req, res, (body) => {
+      voiceSend({ cmd: "speaking", on: !!body.on });
+      return json(res, 200, { ok: true });
+    });
+  }
+
+  if (sub === "tts" && req.method === "POST") {
+    return H.readJsonBody(req, res, async (body) => {
+      const r = await speak(String(body.text || ""));
+      if (r.error || !r.data) return json(res, 503, { ok: false, error: r.error || "no audio" });
+      const buf = Buffer.from(r.data, "base64");
+      res.writeHead(200, { "Content-Type": r.mime || "audio/wav", "Content-Length": buf.length, "Cache-Control": "no-store" });
+      return res.end(buf);
+    });
+  }
+
+  if (sub === "memory") {
+    if (req.method === "GET") return json(res, 200, { ok: true, facts: loadFacts(), graph: !!graphSummary() });
+    return H.readJsonBody(req, res, (body) => {
+      const r = body.forget ? forget(body.forget) : remember(body.fact);
+      return json(res, r.ok ? 200 : 400, { ...r, facts: loadFacts() });
+    });
+  }
+
+  if (sub === "history") return json(res, 200, { ok: true, history: loadHistory().slice(0, 50) });
+
+  if (sub === "home" && req.method === "POST") {
+    return H.readJsonBody(req, res, async (body) => {
+      const place = String(body.place || "").trim();
+      if (!place) { saveSettings({ home: null }); return json(res, 200, { ok: true, settings: publicSettings() }); }
+      let loc = null;
+      try { loc = await web.geocode(place); } catch (e) {}
+      if (!loc) return json(res, 400, { ok: false, error: "Couldn't find " + place + "." });
+      saveSettings({ home: loc });
+      return json(res, 200, { ok: true, settings: publicSettings() });
+    });
+  }
+
+  if (sub === "local") {
+    if (req.method === "GET") { await localProbe(true); return json(res, 200, { ok: true, status: status() }); }
+    return H.readJsonBody(req, res, async (body) => {
+      let r;
+      if (body.action === "start") r = localStart();
+      else if (body.action === "stop") r = await localStop();
+      else if (body.action === "edit") r = localEdit();
+      else r = { ok: false, error: "unknown action" };
+      broadcast({ type: "status", status: status() });
+      return json(res, r.ok ? 200 : 400, { ...r, status: status() });
+    });
+  }
+
+  return json(res, 404, { ok: false, error: "unknown jarvis route" });
+}
+
+// -------------------------------------------------------------------- init --
+function init(host) {
+  H = host;
+  loadSettings();
+  // The wake word is resident: start the helper with the server when it is on,
+  // rather than waiting for the panel to ask.
+  if (settings.wake) setTimeout(voiceStart, 1500);
+  // Keep the local model's status fresh for the panel without a request.
+  setInterval(() => { localProbe(true).then(() => broadcast({ type: "status", status: status() })); }, 15000).unref();
+}
+
+module.exports = { init, handle, STATE_FILES: ["jarvis.json", "jarvis-memory.json", "jarvis-history.json"] };

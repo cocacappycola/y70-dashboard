@@ -72,8 +72,18 @@
     // be ticked — so it stays correct across a reload, a collapsed panel, or a
     // browser that throttled our timers while hidden.
     let timers = [];
-    try { timers = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { timers = []; }
+    const load = () => { try { timers = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { timers = []; } };
+    load();
     const save = () => { try { localStorage.setItem(KEY, JSON.stringify(timers)); } catch (e) {} };
+    // Something else wrote the timers (Jarvis set one by voice, the island
+    // stopped one): take that list rather than saving over it later.
+    window.addEventListener("storage", (e) => { if (e.key === KEY) { load(); render(); } });
+
+    // In the Jarvis fork the island in the top bar rings for every timer, so
+    // this panel only shows that one is done instead of beeping as well.
+    const islandRings = (() => {
+      try { return !!(window.parent && window.parent !== window && window.parent.y70Island); } catch (e) { return false; }
+    })();
 
     let audioCtx = null, ringing = false, ringTimer = null;
     function beep() {
@@ -188,7 +198,7 @@
         el.querySelector(".b-pause").textContent = t.pausedLeft != null ? "▶" : "⏸";
         if (done) {
           anyDone = true;
-          if (!t.fired) { t.fired = true; save(); startRinging(); }
+          if (!t.fired && !islandRings) { t.fired = true; save(); startRinging(); }
         }
       }
       $("silence").style.display = anyDone ? "block" : "none";
@@ -210,8 +220,10 @@
     }
 
     $("silence").addEventListener("pointerup", () => {
+      load();
       timers = timers.filter((t) => left(t) > 0);
       stopRinging(); save(); render();
+      if (islandRings) { try { window.parent.y70Island.stop(); } catch (e) {} }
     });
 
     renderPresets();

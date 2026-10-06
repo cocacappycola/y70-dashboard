@@ -1,0 +1,1401 @@
+// ============================================================================
+//  Jarvis fork — the status bar, the island, alarms and timers, and Jarvis.
+//
+//  Loaded after shell.js and shares its globals ($, APPS, setApp, appFrame,
+//  native, relayKeyboardRequest, syncWebViews, lastState).
+//
+//  The island is the one place all of this lives, the way Apple's Dynamic
+//  Island does: a black pill in the top bar that shows what is going on (a
+//  timer counting down, Jarvis listening) and grows into a card when tapped,
+//  when an alarm rings, or when Jarvis has something to say.
+// ============================================================================
+(() => {
+  "use strict";
+
+  const API = "/api/jarvis/";
+  const body = document.body;
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  const post = (p, data) => fetch(API + p, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data || {}),
+  }).then((r) => r.json()).catch((e) => ({ ok: false, error: e.message }));
+
+  // ---------------------------------------------------------------- time ----
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  function fmtLeft(ms) {
+    const s = Math.ceil(ms / 1000);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (h) return h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+    return m + ":" + String(sec).padStart(2, "0");
+  }
+  function human(sec) {
+    sec = Math.round(sec);
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    const parts = [];
+    if (h) parts.push(h + (h === 1 ? " hour" : " hours"));
+    if (m) parts.push(m + (m === 1 ? " minute" : " minutes"));
+    if (s && !h) parts.push(s + (s === 1 ? " second" : " seconds"));
+    return parts.join(" ") || "0 seconds";
+  }
+  // Same short names the Timer widget gives its presets.
+  const shortDur = (s) => (s >= 3600 && s % 3600 === 0 ? s / 3600 + "h" : s >= 60 && s % 60 === 0 ? s / 60 + "m" : human(s));
+
+  // -------------------------------------------------------------- timers ----
+  // Stored exactly as the Timer widget stores them, so a timer set by voice
+  // shows up in the widget and one set in the widget counts down here.
+  const TKEY = "y70_timers";
+  const Timers = {
+    all() { try { return JSON.parse(localStorage.getItem(TKEY) || "[]"); } catch (e) { return []; } },
+    save(list) { try { localStorage.setItem(TKEY, JSON.stringify(list)); } catch (e) {} },
+    left(t) { return t.pausedLeft != null ? t.pausedLeft : Math.max(0, t.endsAt - Date.now()); },
+    add(seconds, label) {
+      const list = Timers.all();
+      const t = {
+        id: "t" + Date.now() + Math.random().toString(36).slice(2, 6),
+        name: (label && String(label).trim()) || shortDur(seconds),
+        total: seconds * 1000, endsAt: Date.now() + seconds * 1000, pausedLeft: null, fired: false,
+      };
+      list.push(t);
+      Timers.save(list);
+      return t;
+    },
+    update(id, fn) {
+      const list = Timers.all();
+      const t = list.find((x) => x.id === id);
+      if (t) { fn(t); Timers.save(list); }
+    },
+    remove(id) { Timers.save(Timers.all().filter((t) => t.id !== id)); },
+    togglePause(id) {
+      Timers.update(id, (t) => {
+        if (t.pausedLeft == null) t.pausedLeft = Math.max(0, t.endsAt - Date.now());
+        else { t.endsAt = Date.now() + t.pausedLeft; t.pausedLeft = null; }
+      });
+    },
+    addTime(id, ms) {
+      Timers.update(id, (t) => {
+        if (t.pausedLeft != null) t.pausedLeft += ms;
+        else t.endsAt = Math.max(Date.now(), t.endsAt) + ms;
+        t.total += ms; t.fired = false;
+      });
+    },
+  };
+
+  // -------------------------------------------------------------- alarms ----
+  //  { id, time: "07:30", label, days: [0..6] (0 = Sunday, empty = once),
+  //    on, armedAt, lastFired: "YYYY-MM-DD", snoozeUntil }
+  // A one-off alarm rings at its next occurrence after being set, then turns
+  // itself off. armedAt stops an alarm set for 7:30 at 7:31 ringing at once.
+  const AKEY = "y70_alarms";
+  const DAY = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  const dayKey = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  const Alarms = {
+    all() { try { return JSON.parse(localStorage.getItem(AKEY) || "[]"); } catch (e) { return []; } },
+    save(list) { try { localStorage.setItem(AKEY, JSON.stringify(list)); } catch (e) {} },
+    add(time, label, days) {
+      const list = Alarms.all();
+      const a = { id: "a" + Date.now().toString(36), time, label: label || "", days: days || [], on: true, armedAt: Date.now(), lastFired: null, snoozeUntil: null };
+      list.push(a);
+      Alarms.save(list.sort((x, y) => x.time.localeCompare(y.time)));
+      return a;
+    },
+    update(id, fn) {
+      const list = Alarms.all();
+      const a = list.find((x) => x.id === id);
+      if (a) { fn(a); Alarms.save(list); }
+    },
+    remove(id) { Alarms.save(Alarms.all().filter((a) => a.id !== id)); },
+    // When it will next ring, as a timestamp.
+    next(a, from) {
+      if (!a.on) return null;
+      if (a.snoozeUntil) return a.snoozeUntil;
+      const [h, m] = a.time.split(":").map(Number);
+      const base = new Date(from || Date.now());
+      for (let i = 0; i < 8; i++) {
+        const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i, h, m, 0, 0);
+        if (d.getTime() <= (from || Date.now())) continue;
+        if (a.days.length && !a.days.includes(d.getDay())) continue;
+        return d.getTime();
+      }
+      return null;
+    },
+  };
+  function parseDays(days) {
+    const out = new Set();
+    for (const raw of [].concat(days || [])) {
+      const d = String(raw).toLowerCase().trim();
+      if (/^(daily|every ?day|everyday|all)$/.test(d)) [0, 1, 2, 3, 4, 5, 6].forEach((x) => out.add(x));
+      else if (/^weekdays?$/.test(d)) [1, 2, 3, 4, 5].forEach((x) => out.add(x));
+      else if (/^weekends?$/.test(d)) [0, 6].forEach((x) => out.add(x));
+      else {
+        const i = DAY.indexOf(d.slice(0, 3));
+        if (i >= 0) out.add(i);
+      }
+    }
+    return [...out].sort();
+  }
+  function describeDays(days) {
+    if (!days || !days.length) return "once";
+    const k = days.join(",");
+    if (k === "0,1,2,3,4,5,6") return "every day";
+    if (k === "1,2,3,4,5") return "weekdays";
+    if (k === "0,6") return "weekends";
+    return days.map((d) => DAY[d][0].toUpperCase() + DAY[d].slice(1)).join(" ");
+  }
+  const fmtAlarm = (t) => {
+    const [h, m] = t.split(":").map(Number);
+    return new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  };
+
+  // --------------------------------------------------------------- sound ----
+  let actx = null;
+  function audio() {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === "suspended") actx.resume();
+    } catch (e) { actx = null; }
+    return actx;
+  }
+  function tone(freq, start, dur, vol, type) {
+    const a = audio();
+    if (!a) return;
+    const t = a.currentTime + start;
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = type || "sine";
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+  const chime = {
+    listen() { tone(660, 0, 0.16, 0.12); tone(990, 0.09, 0.22, 0.12); },
+    done() { tone(990, 0, 0.14, 0.08); tone(740, 0.08, 0.22, 0.08); },
+    error() { tone(220, 0, 0.25, 0.1, "triangle"); },
+  };
+
+  // ------------------------------------------------------------- ringing ----
+  //  ring = { kind: "timer" | "alarm", id, label, title }
+  let ring = null, ringLoop = null, ringStarted = 0;
+  const RING_MAX_MS = 10 * 60 * 1000;
+
+  function ringPattern() {
+    // A bright three-note figure, every 1.6s.
+    tone(1047, 0, 0.18, 0.2, "triangle"); tone(1319, 0.2, 0.18, 0.2, "triangle"); tone(1568, 0.4, 0.32, 0.2, "triangle");
+  }
+  function startRing(r) {
+    if (ring && ring.id === r.id) return;
+    ring = r;
+    ringStarted = Date.now();
+    clearInterval(ringLoop);
+    ringPattern();
+    ringLoop = setInterval(() => {
+      if (!ring || Date.now() - ringStarted > RING_MAX_MS) return stopRing(false);
+      ringPattern();
+    }, 1600);
+    openCard("ring");
+    renderAll();
+  }
+  function stopRing(snooze) {
+    clearInterval(ringLoop);
+    ringLoop = null;
+    const r = ring;
+    ring = null;
+    if (r && r.kind === "timer") Timers.remove(r.id);
+    if (r && r.kind === "alarm" && snooze) Alarms.update(r.id, (a) => { a.snoozeUntil = Date.now() + 9 * 60 * 1000; });
+    renderAll();
+    if (!J.mode || J.mode === "idle") scheduleClose(1200);
+  }
+
+  // The Timer widget defers to this rather than beeping on its own as well.
+  window.y70Island = {
+    ringing: () => !!ring,
+    stop: () => { if (ring) stopRing(false); },
+  };
+
+  // ---------------------------------------------------------------- tick ----
+  function tick() {
+    const now = Date.now();
+    // Timers: ring the first one that reaches zero.
+    for (const t of Timers.all()) {
+      if (Timers.left(t) <= 0 && t.pausedLeft == null && !t.fired) {
+        Timers.update(t.id, (x) => { x.fired = true; });
+        startRing({ kind: "timer", id: t.id, label: t.name, title: "Timer done" });
+        break;
+      }
+    }
+    // If the ringing timer was cleared elsewhere (the widget's Silence), stop.
+    if (ring && ring.kind === "timer" && !Timers.all().some((t) => t.id === ring.id)) stopRing(false);
+
+    // Alarms.
+    const d = new Date(now);
+    for (const a of Alarms.all()) {
+      if (!a.on) continue;
+      if (a.snoozeUntil) {
+        if (now >= a.snoozeUntil) {
+          Alarms.update(a.id, (x) => { x.snoozeUntil = null; });
+          startRing({ kind: "alarm", id: a.id, label: a.label, title: fmtAlarm(a.time) });
+        }
+        continue;
+      }
+      const [h, m] = a.time.split(":").map(Number);
+      const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m).getTime();
+      const due = now >= target && now - target < 120000 && target >= (a.armedAt || 0) - 1000;
+      const dayOk = !a.days.length || a.days.includes(d.getDay());
+      if (due && dayOk && a.lastFired !== dayKey(d)) {
+        Alarms.update(a.id, (x) => { x.lastFired = dayKey(d); if (!x.days.length) x.on = false; });
+        startRing({ kind: "alarm", id: a.id, label: a.label, title: fmtAlarm(a.time) });
+      }
+    }
+    renderIsland();
+    tickCard();
+  }
+
+  // ---------------------------------------------------------- status bar ----
+  function renderClock() {
+    $("#sb-clock").textContent = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(/\s?[AP]M$/i, "");
+    const next = Alarms.all().map((a) => Alarms.next(a)).filter(Boolean).sort((x, y) => x - y)[0];
+    const sa = $("#sb-alarm");
+    // Like a phone: show the next alarm only when it is within a day.
+    if (next && next - Date.now() < 24 * 3600 * 1000) { sa.hidden = false; sa.textContent = clock(next); }
+    else sa.hidden = true;
+  }
+
+  // -------------------------------------------------------------- island ----
+  function islandSegments() {
+    const segs = [];
+    if (ring) segs.push({ cls: "ring", ico: ring.kind === "alarm" ? "⏰" : "⏱", label: (ring.label || ring.title) });
+    if (J.mode !== "idle") {
+      const label = J.mode === "listening" ? "Listening…" : J.mode === "thinking" ? (J.status || "Thinking…") : "";
+      segs.push({ jarvis: true, label });
+    }
+    const running = Timers.all().filter((t) => Timers.left(t) > 0 && !(ring && ring.id === t.id))
+      .sort((a, b) => Timers.left(a) - Timers.left(b));
+    if (running.length) {
+      const t = running[0];
+      segs.push({ ico: t.pausedLeft != null ? "⏸" : "⏱", label: fmtLeft(Timers.left(t)) + (running.length > 1 ? "  +" + (running.length - 1) : ""), timer: true });
+    }
+    return segs;
+  }
+
+  let islandSig = "";
+  function renderIsland() {
+    const segs = islandSegments();
+    const isl = $("#island");
+    body.classList.toggle("island-on", segs.length > 0);
+    const sig = JSON.stringify(segs.map((s) => [s.cls, s.ico, s.jarvis, s.jarvis ? J.mode : 0]));
+    if (sig !== islandSig) {
+      islandSig = sig;
+      isl.innerHTML = "";
+      for (const s of segs) {
+        const seg = el("div", "seg" + (s.cls ? " " + s.cls : ""));
+        if (s.jarvis) {
+          seg.appendChild(el("span", "jv-orb"));
+          if (J.mode === "speaking") {
+            const bars = el("span", "jv-bars");
+            for (let i = 0; i < 4; i++) bars.appendChild(el("i"));
+            seg.appendChild(bars);
+          }
+        } else seg.appendChild(el("span", "seg-ico", s.ico));
+        seg.appendChild(el("span", "seg-label", s.label));
+        isl.appendChild(seg);
+      }
+    } else {
+      // Only the words change from second to second.
+      [...isl.children].forEach((n, i) => { const l = n.querySelector(".seg-label"); if (l && segs[i]) l.textContent = segs[i].label; });
+    }
+  }
+
+  // ---------------------------------------------------------------- card ----
+  let cardOpen = false, closeTimer = null;
+  function openCard() {
+    clearTimeout(closeTimer);
+    if (cardOpen) return;
+    cardOpen = true;
+    renderAll();
+    $("#island-card").classList.add("in");
+    $("#island-backdrop").classList.remove("hidden");
+    body.classList.add("overlay-open");
+    syncWebViews();
+  }
+  function closeCard() {
+    clearTimeout(closeTimer);
+    if (!cardOpen) return;
+    cardOpen = false;
+    $("#island-card").classList.remove("in");
+    $("#island-backdrop").classList.add("hidden");
+    body.classList.remove("overlay-open");
+    if (typing) setTyping(false);
+    alarmDraft = null;
+    syncWebViews();
+  }
+  function scheduleClose(ms) {
+    clearTimeout(closeTimer);
+    if (ring || typing || alarmDraft) return;
+    closeTimer = setTimeout(() => { if (!ring && J.mode === "idle" && !typing) closeCard(); }, ms);
+  }
+
+  // The card's sections are rebuilt only when what they show changes; the
+  // countdowns are updated in place every tick, so an input keeps its focus.
+  function renderAll() {
+    renderIsland();
+    if (!cardOpen) return;
+    const card = $("#island-card");
+    if (!card.firstChild) {
+      for (const id of ["ic-ring", "ic-jarvis", "ic-timers", "ic-alarms"]) card.appendChild(el("div", "ic-sec")).id = id;
+    }
+    renderRing();
+    renderJarvis();
+    renderTimers();
+    renderAlarms();
+  }
+
+  function renderRing() {
+    const box = $("#ic-ring");
+    box.hidden = !ring;
+    box.innerHTML = "";
+    if (!ring) return;
+    const w = el("div", "ic-ring");
+    w.appendChild(el("div", "r-time", ring.kind === "alarm" ? ring.title : "0:00"));
+    w.appendChild(el("div", "r-label", ring.label || (ring.kind === "alarm" ? "Alarm" : "Timer")));
+    const btns = el("div", "r-btns");
+    if (ring.kind === "alarm") {
+      const sn = el("button", "r-snooze", "Snooze 9 min");
+      sn.addEventListener("pointerup", () => stopRing(true));
+      btns.appendChild(sn);
+    } else {
+      const more = el("button", "r-snooze", "+1 minute");
+      more.addEventListener("pointerup", () => { const id = ring.id; stopRingKeep(); Timers.addTime(id, 60000); renderAll(); });
+      btns.appendChild(more);
+    }
+    const stop = el("button", "r-stop", "Stop");
+    stop.addEventListener("pointerup", () => stopRing(false));
+    btns.appendChild(stop);
+    w.appendChild(btns);
+    box.appendChild(w);
+  }
+  // Stop the sound but keep the timer (for +1 minute).
+  function stopRingKeep() {
+    clearInterval(ringLoop);
+    ringLoop = null;
+    ring = null;
+  }
+
+  // -------------------------------------------------------- timers section --
+  // Which timers exist and which are paused: the rows are rebuilt only when
+  // that changes, never just because a second went by.
+  let timersSig = "";
+  const timerSig = (list) => list.map((t) => t.id + ":" + (t.pausedLeft != null ? 1 : 0)).join("|");
+  function renderTimers() {
+    const box = $("#ic-timers");
+    const list = Timers.all();
+    const sig = timerSig(list);
+    if (sig === timersSig && box.firstChild) return tickCard();
+    timersSig = sig;
+    box.innerHTML = "";
+    const head = el("div", "ic-head");
+    head.appendChild(el("span", null, "Timers"));
+    head.appendChild(el("span", "spacer"));
+    box.appendChild(head);
+    for (const t of list) {
+      const row = el("div", "tm-row" + (t.pausedLeft != null ? " paused" : ""));
+      row.dataset.timer = t.id;
+      row.appendChild(el("span", "big", fmtLeft(Timers.left(t))));
+      row.appendChild(el("span", "lbl", t.name));
+      const plus = el("button", "btn btn--ghost btn--sm", "+1m");
+      plus.addEventListener("pointerup", () => { Timers.addTime(t.id, 60000); timersSig = ""; renderTimers(); });
+      const pause = el("button", "btn btn--ghost btn--sm btn--icon", t.pausedLeft != null ? "▶" : "⏸");
+      pause.addEventListener("pointerup", () => { Timers.togglePause(t.id); timersSig = ""; renderTimers(); });
+      const del = el("button", "btn btn--ghost btn--sm btn--icon", "✕");
+      del.addEventListener("pointerup", () => { Timers.remove(t.id); timersSig = ""; renderTimers(); });
+      row.append(plus, pause, del);
+      box.appendChild(row);
+    }
+    const quick = el("div", "ic-quick");
+    for (const [s, label] of [[60, "1m"], [180, "3m"], [300, "5m"], [600, "10m"], [900, "15m"], [1800, "30m"], [3600, "1h"]]) {
+      const b = el("button", "btn btn--ghost btn--chip", "⏱ " + label);
+      b.addEventListener("pointerup", () => { audio(); Timers.add(s); timersSig = ""; renderTimers(); });
+      quick.appendChild(b);
+    }
+    box.appendChild(quick);
+  }
+  function tickCard() {
+    if (!cardOpen) return;
+    const list = Timers.all();
+    if (timerSig(list) !== timersSig) { timersSig = ""; renderTimers(); return; }
+    for (const row of document.querySelectorAll("#ic-timers .tm-row")) {
+      const t = list.find((x) => x.id === row.dataset.timer);
+      if (t) row.querySelector(".big").textContent = fmtLeft(Timers.left(t));
+    }
+  }
+
+  // -------------------------------------------------------- alarms section --
+  let alarmDraft = null;       // { h, m, days: Set } while adding one
+  function renderAlarms() {
+    const box = $("#ic-alarms");
+    box.innerHTML = "";
+    const head = el("div", "ic-head");
+    head.appendChild(el("span", null, "Alarms"));
+    head.appendChild(el("span", "spacer"));
+    const add = el("button", "btn btn--ghost btn--sm", alarmDraft ? "Cancel" : "+ Alarm");
+    add.addEventListener("pointerup", () => {
+      if (alarmDraft) alarmDraft = null;
+      else {
+        const d = new Date(Date.now() + 8 * 3600 * 1000);
+        alarmDraft = { h: d.getHours(), m: Math.round(d.getMinutes() / 5) * 5 % 60, days: new Set() };
+      }
+      renderAlarms();
+    });
+    head.appendChild(add);
+    box.appendChild(head);
+
+    for (const a of Alarms.all()) {
+      const row = el("div", "tm-row" + (a.on ? "" : " off"));
+      row.appendChild(el("span", "big", fmtAlarm(a.time)));
+      const lbl = el("span", "lbl", a.label || "Alarm");
+      const nx = Alarms.next(a);
+      lbl.appendChild(el("span", "days", describeDays(a.days) + (a.snoozeUntil ? " · snoozed to " + clock(a.snoozeUntil) : nx ? " · " + relDay(nx) : "")));
+      row.appendChild(lbl);
+      const tog = el("button", "btn btn--ghost btn--sm" + (a.on ? " is-on" : ""), a.on ? "On" : "Off");
+      tog.addEventListener("pointerup", () => { Alarms.update(a.id, (x) => { x.on = !x.on; x.armedAt = Date.now(); x.snoozeUntil = null; }); renderAlarms(); renderClock(); });
+      const del = el("button", "btn btn--ghost btn--sm btn--icon", "✕");
+      del.addEventListener("pointerup", () => { Alarms.remove(a.id); renderAlarms(); renderClock(); });
+      row.append(tog, del);
+      box.appendChild(row);
+    }
+    if (!Alarms.all().length && !alarmDraft) box.appendChild(el("div", "jv-state", "No alarms. Say “Jarvis, wake me at 7.”"));
+
+    if (alarmDraft) {
+      const d = alarmDraft;
+      const wrap = el("div", "al-new");
+      const step = (txt, fn) => { const b = el("button", "btn btn--ghost btn--sm btn--icon", txt); b.addEventListener("pointerup", () => { fn(); renderAlarms(); }); return b; };
+      const t = el("span", "al-time", fmtAlarm(String(d.h).padStart(2, "0") + ":" + String(d.m).padStart(2, "0")));
+      wrap.append(step("−h", () => { d.h = (d.h + 23) % 24; }), step("+h", () => { d.h = (d.h + 1) % 24; }), t,
+        step("−5", () => { d.m = (d.m + 55) % 60; }), step("+5", () => { d.m = (d.m + 5) % 60; }));
+      const days = el("div", "al-days");
+      DAY.forEach((n, i) => {
+        const b = el("button", "btn btn--ghost btn--sm" + (d.days.has(i) ? " is-on" : ""), n[0].toUpperCase() + n.slice(1, 2));
+        b.addEventListener("pointerup", () => { d.days.has(i) ? d.days.delete(i) : d.days.add(i); renderAlarms(); });
+        days.appendChild(b);
+      });
+      const save = el("button", "btn btn--primary btn--sm", "Set alarm");
+      save.addEventListener("pointerup", () => {
+        audio();
+        Alarms.add(String(d.h).padStart(2, "0") + ":" + String(d.m).padStart(2, "0"), "", [...d.days].sort());
+        alarmDraft = null;
+        renderAlarms(); renderClock();
+      });
+      days.appendChild(save);
+      wrap.appendChild(days);
+      box.appendChild(wrap);
+    }
+  }
+  function relDay(ts) {
+    const d = new Date(ts), now = new Date();
+    const diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 864e5);
+    return diff === 0 ? "today" : diff === 1 ? "tomorrow" : d.toLocaleDateString([], { weekday: "long" });
+  }
+
+  // ============================================================== JARVIS ====
+  const J = {
+    mode: "idle",            // idle | listening | thinking | speaking
+    heard: "", reply: "", status: "", note: "",
+    cards: [], conv: null, convAt: 0, ctl: null, provider: null,
+  };
+  let JS = null;              // settings, from the server
+  let JST = null;             // status, from the server
+  let typing = false;
+
+  function setMode(m) {
+    J.mode = m;
+    body.classList.toggle("jv-active", m !== "idle");
+    body.classList.toggle("jv-listening", m === "listening");
+    body.classList.toggle("jv-speaking", m === "speaking");
+    if (m !== "speaking") document.documentElement.style.setProperty("--jv-level", 1);
+    renderIsland();
+    renderJarvis();
+  }
+
+  // ----------------------------------------------------------- the card -----
+  let replyEl = null, heardEl = null, statusEl = null, cardsEl = null, noteEl = null, stateEl = null;
+  function renderJarvis() {
+    if (!cardOpen) return;
+    const box = $("#ic-jarvis");
+    const show = J.mode !== "idle" || J.reply || J.heard || J.cards.length || typing || J.status || J.note;
+    box.hidden = !show;
+    if (!show) return;
+    if (!box.firstChild) {
+      const top = el("div", "jv-top");
+      top.appendChild(el("span", "jv-orb"));
+      stateEl = el("div", "jv-state");
+      top.appendChild(stateEl);
+      top.appendChild(el("span", "spacer")).style.flex = "1";
+      const kb = el("button", "btn btn--ghost btn--sm btn--icon", "⌨");
+      kb.title = "Type instead";
+      kb.addEventListener("pointerup", () => setTyping(!typing));
+      // The orb again: it is what "Jarvis, listen" looks like everywhere.
+      const mic = el("button", "btn btn--ghost btn--sm btn--icon jv-again");
+      mic.appendChild(el("span", "jv-orb"));
+      mic.title = "Ask again";
+      mic.addEventListener("pointerup", () => startListening());
+      top.append(kb, mic);
+      box.appendChild(top);
+      heardEl = box.appendChild(el("div", "jv-heard"));
+      replyEl = box.appendChild(el("div", "jv-reply"));
+      statusEl = box.appendChild(el("div", "jv-status"));
+      noteEl = box.appendChild(el("div", "jv-note"));
+      box.appendChild(el("div", "jv-type")).id = "jv-type";
+      cardsEl = box.appendChild(el("div", "jv-cards"));
+    }
+    stateEl.textContent = {
+      idle: J.provider ? "Jarvis · " + (J.provider === "claude" ? "Claude" : "local model") : "Jarvis",
+      listening: "Listening…", thinking: "Thinking…", speaking: "Speaking",
+    }[J.mode];
+    heardEl.textContent = J.heard ? "“" + J.heard + "”" : "";
+    replyEl.textContent = J.reply.trim();
+    statusEl.innerHTML = "";
+    if (J.status) {
+      if (J.mode === "thinking") statusEl.appendChild(el("span", "spin"));
+      statusEl.appendChild(el("span", null, J.status));
+    }
+    noteEl.textContent = J.note;
+    renderTyping();
+    renderCards();
+  }
+
+  function renderTyping() {
+    const box = document.getElementById("jv-type");
+    if (!box) return;
+    if (!typing) { box.innerHTML = ""; return; }
+    if (box.firstChild) return;
+    const inp = el("input", "ui-input");
+    inp.placeholder = "Ask Jarvis…";
+    inp.addEventListener("focus", () => relayKeyboardRequest(true));
+    inp.addEventListener("blur", () => relayKeyboardRequest(false));
+    inp.addEventListener("keydown", (e) => {
+      if (native && native.keyboardTouch) native.keyboardTouch();
+      if (e.key === "Enter" && inp.value.trim()) { const q = inp.value.trim(); inp.value = ""; ask(q); }
+    });
+    const send = el("button", "btn btn--primary btn--sm", "Ask");
+    send.addEventListener("pointerup", () => { if (inp.value.trim()) { const q = inp.value.trim(); inp.value = ""; ask(q); } });
+    box.append(inp, send);
+    setTimeout(() => inp.focus(), 50);
+  }
+  function setTyping(on) {
+    typing = !!on;
+    if (!typing) relayKeyboardRequest(false);
+    if (typing) openCard();
+    renderJarvis();
+  }
+
+  // -------------------------------------------------------------- cards -----
+  let cardsSig = "";
+  function renderCards() {
+    if (!cardsEl) return;
+    const sig = JSON.stringify(J.cards).length + ":" + J.cards.length;
+    if (sig === cardsSig && cardsEl.childElementCount === J.cards.length) return;
+    cardsSig = sig;
+    cardsEl.innerHTML = "";
+    for (const c of J.cards.slice(-4)) {
+      const node = cardNode(c);
+      if (node) cardsEl.appendChild(node);
+    }
+  }
+  function openUrl(url) {
+    // In the panel there is no browser to hand a link to, so it goes to the
+    // native shell's handler (your default browser on the main monitor).
+    if (!url) return;
+    try { window.open(url, "_blank"); } catch (e) {}
+  }
+  function imgEl(src, alt) {
+    const i = el("img");
+    i.loading = "lazy"; i.referrerPolicy = "no-referrer"; i.alt = alt || "";
+    i.src = src;
+    i.addEventListener("error", () => i.remove());
+    return i;
+  }
+  function cardNode(c) {
+    const box = el("div", "jc");
+    if (c.kind === "results") {
+      box.appendChild(el("div", "jc-title", "Results · " + c.query));
+      for (const r of (c.items || []).slice(0, 5)) {
+        const row = el("div", "jc-row");
+        const col = el("div");
+        col.appendChild(el("div", "t", r.title));
+        if (r.snippet) col.appendChild(el("div", "s", r.snippet));
+        col.appendChild(el("div", "m", (r.date ? r.date + " · " : "") + r.site));
+        row.appendChild(col);
+        row.addEventListener("pointerup", () => openUrl(r.url));
+        box.appendChild(row);
+      }
+      return box;
+    }
+    if (c.kind === "images") {
+      box.appendChild(el("div", "jc-title", "Images · " + c.query));
+      const grid = el("div", "jc-imgs");
+      for (const im of (c.items || []).slice(0, 9)) {
+        const i = imgEl(im.thumb, im.title);
+        i.addEventListener("pointerup", () => {
+          // Tap a thumbnail to see it big, in place.
+          const big = box.querySelector(".jc-big");
+          if (big) big.remove();
+          const b = imgEl(im.image, im.title);
+          b.className = "jc-big";
+          b.addEventListener("pointerup", () => b.remove());
+          box.appendChild(b);
+        });
+        grid.appendChild(i);
+      }
+      box.appendChild(grid);
+      return box;
+    }
+    if (c.kind === "page") {
+      box.appendChild(el("div", "jc-title", "Reading"));
+      const row = el("div", "jc-row");
+      if (c.image) row.appendChild(imgEl(c.image));
+      const col = el("div");
+      col.appendChild(el("div", "t", c.title || c.url));
+      col.appendChild(el("div", "m", (c.url || "").replace(/^https?:\/\/(www\.)?/, "").split("/")[0]));
+      row.appendChild(col);
+      row.addEventListener("pointerup", () => openUrl(c.url));
+      box.appendChild(row);
+      return box;
+    }
+    if (c.kind === "weather" && c.data) {
+      const w = c.data;
+      box.appendChild(el("div", "jc-title", "Weather · " + w.place));
+      const now = el("div", "jc-wx-now");
+      now.appendChild(el("div", "temp", w.now.temp + "°"));
+      const col = el("div");
+      col.appendChild(el("div", "sky", w.now.sky));
+      col.appendChild(el("div", "more", "Feels " + w.now.feels + "° · wind " + w.now.wind + " mph · " + w.now.humidity + "% humidity"));
+      now.appendChild(col);
+      box.appendChild(now);
+      const days = el("div", "jc-wx-days");
+      for (const d of w.days) {
+        const cell = el("div");
+        cell.appendChild(el("b", null, d.day || d.date));
+        cell.appendChild(document.createTextNode(d.high + "° / " + d.low + "°"));
+        cell.appendChild(el("div", "more", d.sky + (d.rain ? " · " + d.rain + "%" : "")));
+        days.appendChild(cell);
+      }
+      box.appendChild(days);
+      return box;
+    }
+    if (c.kind === "show") {
+      box.appendChild(el("div", "jc-title", c.title || ""));
+      for (const it of (c.items || []).slice(0, 12)) {
+        const row = el("div", "jc-row");
+        if (it.image) row.appendChild(imgEl(it.image));
+        const col = el("div");
+        if (it.title) col.appendChild(el("div", "t", it.title));
+        if (it.text) col.appendChild(el("div", "s", it.text));
+        row.appendChild(col);
+        if (it.url) row.addEventListener("pointerup", () => openUrl(it.url));
+        box.appendChild(row);
+      }
+      return box;
+    }
+    return null;
+  }
+
+  // -------------------------------------------------------------- speech ----
+  // Replies stream in; each sentence is voiced as soon as it is complete, so
+  // Jarvis starts talking long before the answer has finished arriving.
+  const speech = {
+    q: [], buf: "", playing: false, ended: false, gen: 0, audio: null, analyser: null, raf: 0,
+    reset() {
+      this.gen++;
+      this.q = []; this.buf = ""; this.ended = false;
+      if (this.audio) { try { this.audio.pause(); } catch (e) {} }
+      this.audio = null;
+      if (this.playing) post("speaking", { on: false });
+      this.playing = false;
+      cancelAnimationFrame(this.raf);
+    },
+    feed(delta) {
+      if (!JS || !JS.speak) return;
+      this.buf += delta;
+      // Cut at the last sentence end that leaves at least ~30 characters, so
+      // short fragments are not voiced one at a time.
+      const re = /[.!?…]["')\]]*\s+/g;
+      let cut = -1, m;
+      while ((m = re.exec(this.buf))) if (m.index + m[0].length >= 30) cut = m.index + m[0].length;
+      if (cut > 0) { this.enqueue(this.buf.slice(0, cut)); this.buf = this.buf.slice(cut); }
+    },
+    end() {
+      this.ended = true;
+      if (this.buf.trim()) this.enqueue(this.buf);
+      this.buf = "";
+      if (!this.playing && !this.q.length) this.finished();
+    },
+    enqueue(text) {
+      const clean = text.replace(/https?:\/\/\S+/g, "").replace(/[*_#`>~|]/g, "").replace(/\s+/g, " ").trim();
+      if (!clean) return;
+      const gen = this.gen;
+      const p = fetch(API + "tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: clean }) })
+        .then((r) => (r.ok ? r.blob() : null)).then((b) => (b && gen === this.gen ? URL.createObjectURL(b) : null)).catch(() => null);
+      this.q.push(p);
+      this.pump();
+    },
+    async pump() {
+      if (this.playing || !this.q.length) return;
+      const gen = this.gen;
+      this.playing = true;
+      post("speaking", { on: true });
+      const url = await this.q.shift();
+      if (gen !== this.gen) return;
+      if (!url) { this.playing = false; return this.q.length ? this.pump() : this.ended && this.finished(); }
+      setMode("speaking");
+      const a = new Audio(url);
+      this.audio = a;
+      this.meter(a);
+      a.onended = a.onerror = () => {
+        URL.revokeObjectURL(url);
+        if (gen !== this.gen) return;
+        this.playing = false;
+        if (this.q.length) this.pump();
+        else if (this.ended) this.finished();
+      };
+      a.play().catch(() => a.onended());
+    },
+    // The orb breathes with the voice.
+    meter(a) {
+      try {
+        const ac = audio();
+        if (!ac) return;
+        const src = ac.createMediaElementSource(a);
+        const an = ac.createAnalyser();
+        an.fftSize = 256;
+        src.connect(an); an.connect(ac.destination);
+        const data = new Uint8Array(an.frequencyBinCount);
+        const loop = () => {
+          if (this.audio !== a) return;
+          an.getByteTimeDomainData(data);
+          let peak = 0;
+          for (const v of data) peak = Math.max(peak, Math.abs(v - 128));
+          document.documentElement.style.setProperty("--jv-level", (1 + Math.min(0.5, peak / 128)).toFixed(3));
+          this.raf = requestAnimationFrame(loop);
+        };
+        loop();
+      } catch (e) { /* fine without it */ }
+    },
+    finished() {
+      if (this.playing) return;
+      post("speaking", { on: false });
+      cancelAnimationFrame(this.raf);
+      afterAnswer();
+    },
+    stop() { this.reset(); afterAnswer(true); },
+  };
+
+  // After an answer: a question back ("Which one?") keeps the conversation
+  // going by listening again; anything else lets the card fold away.
+  function afterAnswer(interrupted) {
+    if (J.ctl) return;               // the turn is still running
+    setMode("idle");
+    if (!interrupted && /\?\s*$/.test(J.reply.trim()) && JS && JS.speak) {
+      setTimeout(() => { if (J.mode === "idle") startListening(true); }, 350);
+      return;
+    }
+    scheduleClose(J.cards.length ? 45000 : 7000);
+  }
+
+  // --------------------------------------------------------- listening ------
+  async function startListening(followUp) {
+    speech.reset();
+    if (J.ctl) { J.ctl.abort(); J.ctl = null; }
+    if (!followUp) { J.reply = ""; J.cards = []; cardsSig = ""; }
+    J.heard = ""; J.status = ""; J.note = "";
+    openCard();
+    setMode("listening");
+    chime.listen();
+    const r = await post("listen", {});
+    if (!r.ok) {
+      J.status = r.error || "Can't listen right now.";
+      chime.error();
+      setMode("idle");
+      scheduleClose(6000);
+    }
+  }
+
+  function context() {
+    const c = {};
+    if (typeof lastState !== "undefined" && lastState && lastState.hasTrack) {
+      c.playing = lastState.title + " by " + lastState.artist + (lastState.playing ? "" : " (paused)") + " on Spotify";
+    }
+    const ts = Timers.all().filter((t) => Timers.left(t) > 0);
+    if (ts.length) c.timers = ts.map((t) => t.name + " with " + human(Timers.left(t) / 1000) + " left").join(", ");
+    return c;
+  }
+
+  function ask(text) {
+    speech.reset();
+    J.heard = text; J.reply = ""; J.status = ""; J.cards = []; cardsSig = "";
+    openCard();
+    setMode("thinking");
+    // A follow-up within a few minutes continues the conversation.
+    const conv = Date.now() - J.convAt < 4.5 * 60 * 1000 ? J.conv : null;
+    runTurn({ conv, text, context: context() });
+  }
+
+  const TOOL_WORDS = {
+    web_search: "Searching the web", read_page: "Reading", image_search: "Finding pictures",
+    weather: "Checking the weather", volume: "Adjusting the volume", remember: "Remembering",
+    discord: "Talking to Discord", notes: "Opening your notes", pc_status: "Checking the PC", phone: "Checking your phone",
+  };
+
+  async function runTurn(payload) {
+    if (J.ctl) J.ctl.abort();
+    const ctl = new AbortController();
+    J.ctl = ctl;
+    let clientCalls = null;
+    try {
+      const res = await fetch(API + "turn", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: ctl.signal,
+      });
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "", pending = false;
+      const flush = () => { pending = false; renderJarvis(); };
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, i); buf = buf.slice(i + 1);
+          if (!line.trim()) continue;
+          let ev;
+          try { ev = JSON.parse(line); } catch (e) { continue; }
+          switch (ev.type) {
+            case "start": J.conv = ev.conv; J.provider = ev.provider; break;
+            case "status": J.status = ev.text; break;
+            case "thinking": if (J.mode !== "speaking") setMode("thinking"); break;
+            case "text":
+              J.reply += ev.delta;
+              speech.feed(ev.delta);
+              if (J.status && !/…$/.test(J.status)) J.status = "";
+              break;
+            case "tool":
+              J.status = ev.status === "running" ? (TOOL_WORDS[ev.name] || ev.name) + "…" : "";
+              break;
+            case "card": J.cards.push(ev.card); break;
+            case "client": clientCalls = ev.calls; break;
+            case "memory": if (jarvisViewOpen()) loadFacts(); break;
+            case "done": J.convAt = Date.now(); break;
+            case "error":
+              J.reply += (J.reply ? " " : "") + ev.message;
+              speech.feed(" " + ev.message);
+              chime.error();
+              break;
+            default: break;
+          }
+          if (!pending) { pending = true; requestAnimationFrame(flush); }
+        }
+      }
+    } catch (e) {
+      if (ctl.signal.aborted) return;
+      J.status = "Lost the connection to Jarvis.";
+    }
+    if (J.ctl !== ctl) return;
+    J.ctl = null;
+    if (clientCalls) {
+      const results = [];
+      for (const c of clientCalls) {
+        try { results.push({ id: c.id, content: String(await runClientTool(c)) }); }
+        catch (e) { results.push({ id: c.id, content: "Failed: " + (e.message || e), is_error: true }); }
+      }
+      renderAll();
+      return runTurn({ conv: J.conv, results });
+    }
+    J.status = "";
+    J.convAt = Date.now();
+    renderJarvis();
+    // Silent replies get a small chime so you know the answer is there.
+    if ((!JS || !JS.speak) && J.reply.trim()) chime.done();
+    speech.end();
+  }
+
+  // ------------------------------------------------------- client tools -----
+  async function runClientTool(c) {
+    const a = c.input || {};
+    switch (c.name) {
+      case "timer": {
+        if (a.action === "set") {
+          const s = Math.round(Number(a.seconds));
+          if (!(s > 0)) return "How long? seconds is required.";
+          audio();
+          const t = Timers.add(s, a.label);
+          renderAll();
+          return "Timer \"" + t.name + "\" set for " + human(s) + "; it ends at " + clock(t.endsAt) + ".";
+        }
+        if (a.action === "cancel") {
+          const list = Timers.all();
+          const q = String(a.label || "").toLowerCase().trim();
+          const gone = q ? list.filter((t) => t.name.toLowerCase().includes(q)) : list;
+          Timers.save(list.filter((t) => !gone.includes(t)));
+          if (ring && ring.kind === "timer" && gone.some((t) => t.id === ring.id)) stopRing(false);
+          renderAll();
+          return gone.length ? "Cancelled " + gone.length + " timer" + (gone.length > 1 ? "s" : "") + "." : "No timer matched.";
+        }
+        const list = Timers.all().filter((t) => Timers.left(t) > 0);
+        return list.length ? JSON.stringify(list.map((t) => ({ label: t.name, left: human(Timers.left(t) / 1000), paused: t.pausedLeft != null }))) : "No timers running.";
+      }
+      case "alarm": {
+        if (a.action === "set") {
+          const m = String(a.time || "").match(/^(\d{1,2}):(\d{2})/);
+          if (!m || +m[1] > 23 || +m[2] > 59) return "time must be HH:MM, 24-hour.";
+          const time = m[1].padStart(2, "0") + ":" + m[2];
+          const days = parseDays(a.days);
+          audio();
+          const al = Alarms.add(time, a.label, days);
+          renderAll(); renderClock();
+          const nx = Alarms.next(al);
+          return "Alarm set for " + fmtAlarm(time) + " (" + describeDays(days) + ")" + (nx ? ", next ringing " + relDay(nx) + " at " + clock(nx) : "") + ".";
+        }
+        if (a.action === "cancel") {
+          const list = Alarms.all();
+          const q = String(a.label || "").toLowerCase().trim();
+          const tm = String(a.time || "").match(/^(\d{1,2}):(\d{2})/);
+          const t = tm ? tm[1].padStart(2, "0") + ":" + tm[2] : null;
+          const gone = list.filter((x) => (!q && !t) || (t && x.time === t) || (q && x.label.toLowerCase().includes(q)));
+          Alarms.save(list.filter((x) => !gone.includes(x)));
+          renderAll(); renderClock();
+          return gone.length ? "Removed " + gone.length + " alarm" + (gone.length > 1 ? "s" : "") + "." : "No alarm matched.";
+        }
+        const list = Alarms.all();
+        return list.length ? JSON.stringify(list.map((x) => ({ time: fmtAlarm(x.time), label: x.label, repeats: describeDays(x.days), on: x.on }))) : "No alarms set.";
+      }
+      case "music": return musicTool(a);
+      case "show":
+        J.cards.push({ kind: "show", title: a.title, items: Array.isArray(a.items) ? a.items : [] });
+        renderJarvis();
+        return "It's on the screen.";
+      case "open_app":
+        if (!APPS[a.app]) return "There's no app called " + a.app + ".";
+        setApp(a.app);
+        return "Opened " + APPS[a.app].title + ".";
+      default:
+        return "Unknown tool " + c.name;
+    }
+  }
+
+  async function musicTool(a) {
+    const media = (action) => fetch("/api/system", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd: "media.command", args: { action } }),
+    }).then((r) => r.json()).catch((e) => ({ ok: false, error: e.message }));
+    switch (a.action) {
+      case "play": {
+        if (!a.query) { const r = await media("play"); return r.ok ? "Resumed." : "Couldn't resume: " + r.error; }
+        const r = await spotifyCmd({ action: "search_play", query: a.query, kind: a.kind || "" });
+        return r.text || (r.ok ? "Playing." : "Couldn't play that.");
+      }
+      case "resume": { const r = await media("play"); return r.ok ? "Resumed." : "Nothing to resume (" + r.error + ")."; }
+      case "pause": { const r = await media("pause"); return r.ok ? "Paused." : "Nothing is playing (" + r.error + ")."; }
+      case "next": { const r = await media("next"); return r.ok ? "Skipped." : "Couldn't skip (" + r.error + ")."; }
+      case "previous": { const r = await media("prev"); return r.ok ? "Went back." : "Couldn't go back (" + r.error + ")."; }
+      case "now_playing": {
+        const s = await fetch("/api/system").then((r) => r.json()).catch(() => ({}));
+        const m = s.media;
+        if (!m || !m.title) return "Nothing is playing.";
+        return JSON.stringify({ title: m.title, artist: m.artist, album: m.album, playing: m.playing, app: m.app || m.source });
+      }
+      default: return "Unknown music action.";
+    }
+  }
+
+  // Asks the Spotify app (which holds the sign-in) to search and play.
+  function spotifyCmd(msg) {
+    return new Promise((resolve) => {
+      const id = "j" + Date.now() + Math.random().toString(36).slice(2, 6);
+      const existed = !!document.getElementById("app-spotify");
+      const f = appFrame("spotify");
+      let done = false;
+      const finish = (r) => {
+        if (done) return;
+        done = true;
+        window.removeEventListener("message", onMsg);
+        resolve(r);
+      };
+      const onMsg = (e) => { if (e.data && e.data.type === "y70:cmd-reply" && e.data.id === id) finish(e.data); };
+      window.addEventListener("message", onMsg);
+      const send = () => { try { f.contentWindow.postMessage({ type: "y70:cmd", id, ...msg }, "*"); } catch (e) {} };
+      // A frame made just now has to load and sign in before it can answer.
+      if (existed) send(); else f.addEventListener("load", () => setTimeout(send, 2500), { once: true });
+      setTimeout(() => finish({ ok: false, text: "Spotify didn't answer. Is it signed in?" }), existed ? 9000 : 16000);
+    });
+  }
+
+  // -------------------------------------------------------------- events ----
+  let es = null;
+  function connect() {
+    try { es && es.close(); } catch (e) {}
+    es = new EventSource(API + "events");
+    es.onmessage = (e) => {
+      let ev;
+      try { ev = JSON.parse(e.data); } catch (err) { return; }
+      onEvent(ev);
+    };
+  }
+
+  function onEvent(ev) {
+    switch (ev.type) {
+      case "hello":
+      case "status":
+        JST = ev.status;
+        renderJarvisSub();
+        if (jarvisViewOpen()) renderForm();
+        return;
+      case "settings":
+        JS = ev.settings;
+        return;
+      case "wake":
+        audio();
+        if (ring) { stopRing(ring.kind === "alarm"); return; }      // "Jarvis" silences a ringing alarm (snoozes it)
+        if (J.mode === "speaking") speech.reset();
+        if (ev.tail && ev.tail.split(/\s+/).length >= 2) { chime.listen(); ask(ev.tail); }
+        else startListening();
+        return;
+      case "listening":
+        if (J.mode !== "listening") setMode("listening");
+        J.status = ev.engine === "offline" && JS && JS.onlineSpeech ? "Offline recognition" : "";
+        renderJarvis();
+        return;
+      case "partial":
+        if (J.mode !== "listening") return;
+        J.heard = ev.text;
+        renderJarvis();
+        return;
+      case "level":
+        if (J.mode === "listening") document.documentElement.style.setProperty("--jv-level", (1 + Math.min(0.6, ev.v / 120)).toFixed(3));
+        return;
+      case "final":
+        if (J.mode !== "listening") return;
+        if (ev.text && ev.text.trim()) ask(ev.text.trim());
+        else {
+          J.heard = "";
+          J.status = ev.reason === "cancelled" ? "" : "I didn’t catch that.";
+          setMode("idle");
+          scheduleClose(3000);
+        }
+        return;
+      case "online-unavailable":
+        J.note = "Windows has online speech recognition switched off (Settings › Privacy & security › Speech), so this used the offline recognizer.";
+        renderJarvis();
+        return;
+      case "game":
+        if (JST) JST.game = { on: ev.on, exe: ev.exe };
+        if (jarvisViewOpen()) renderForm();
+        return;
+      case "memory":
+        if (jarvisViewOpen()) loadFacts();
+        return;
+      default: return;
+    }
+  }
+
+  // ----------------------------------------------------------- the button ---
+  function wireButton() {
+    const btn = $("#jv-btn");
+    let pressT = 0, longTimer = null, long = false;
+    // Kept off the top bar's own drag/tap handling.
+    btn.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      pressT = Date.now(); long = false;
+      longTimer = setTimeout(() => { long = true; setTyping(true); }, 550);
+    });
+    btn.addEventListener("pointerup", (e) => {
+      e.stopPropagation();
+      clearTimeout(longTimer);
+      if (long) return;
+      audio();
+      if (J.mode === "listening") { post("cancel"); setMode("idle"); scheduleClose(800); return; }
+      if (J.mode === "speaking") { speech.stop(); return; }
+      if (J.mode === "thinking") { if (J.ctl) J.ctl.abort(); J.ctl = null; setMode("idle"); return; }
+      startListening();
+    });
+    const isl = $("#island");
+    isl.addEventListener("pointerdown", (e) => e.stopPropagation());
+    isl.addEventListener("pointerup", (e) => { e.stopPropagation(); cardOpen ? closeCard() : openCard(); });
+    $("#island-backdrop").addEventListener("pointerup", () => {
+      if (ring) return;                        // a ringing alarm needs an answer
+      if (J.mode === "listening") post("cancel");
+      closeCard();
+    });
+    // Touching the card holds it open.
+    $("#island-card").addEventListener("pointerdown", () => clearTimeout(closeTimer));
+  }
+
+  // Long-press on the status bar's clock opens the island too: a second way in
+  // when nothing is running and the pill is hidden.
+  function wireClock() {
+    const c = $("#sb-clock");
+    c.addEventListener("pointerdown", (e) => e.stopPropagation());
+    c.addEventListener("pointerup", (e) => { e.stopPropagation(); cardOpen ? closeCard() : openCard(); });
+  }
+
+  // ========================================================= SETTINGS ======
+  const jarvisViewOpen = () => !$("#jarvis-view").classList.contains("hidden");
+  function showJarvisView(on) {
+    $("#jarvis-view").classList.toggle("hidden", !on);
+    $(".drawer-inner").classList.toggle("hidden", on);
+    if (on) { refreshSettings(); loadFacts(); }
+  }
+  let facts = [];
+  async function loadFacts() {
+    const r = await fetch(API + "memory").then((x) => x.json()).catch(() => null);
+    facts = (r && r.facts) || [];
+    if (jarvisViewOpen()) renderForm();
+  }
+  async function refreshSettings() {
+    const r = await fetch(API + "settings").then((x) => x.json()).catch(() => null);
+    if (r && r.ok) { JS = r.settings; JST = r.status; }
+    renderJarvisSub();
+    if (jarvisViewOpen()) renderForm();
+  }
+  let saveHintT = 0;
+  async function saveSetting(patch) {
+    const r = await post("settings", patch);
+    if (r.ok) { JS = r.settings; JST = r.status; }
+    const hint = $("#jarvis-saved");
+    hint.textContent = r.ok ? "saved" : (r.error || "couldn't save");
+    clearTimeout(saveHintT);
+    saveHintT = setTimeout(() => { hint.textContent = ""; }, 1800);
+    renderForm();
+    renderJarvisSub();
+  }
+  function renderJarvisSub() {
+    const sub = $("#jarvis-sub");
+    if (!sub || !JS) return;
+    const brain = JS.provider === "auto" ? "auto" : JS.provider === "claude" ? "Claude" : "local";
+    sub.textContent = brain + (JS.wake ? " · “" + JS.wakePhrase + "”" : "");
+  }
+
+  // Inputs on the panel need the keyboard borrowed while they are focused.
+  function kbInput(inp) {
+    inp.addEventListener("focus", () => relayKeyboardRequest(true));
+    inp.addEventListener("blur", () => relayKeyboardRequest(false));
+    inp.addEventListener("keydown", () => { if (native && native.keyboardTouch) native.keyboardTouch(); });
+    return inp;
+  }
+  function chips(options, current, onPick) {
+    const row = el("div", "jf-row");
+    for (const [value, label] of options) {
+      const b = el("button", "btn btn--ghost btn--chip" + (value === current ? " is-on" : ""), label);
+      b.addEventListener("pointerup", () => onPick(value));
+      row.appendChild(b);
+    }
+    return row;
+  }
+  function toggle(label, hint, on, onChange) {
+    const l = el("label", "set-toggle");
+    const s = el("span", null, label);
+    if (hint) s.appendChild(el("span", "set-hint", hint));
+    const c = el("input");
+    c.type = "checkbox"; c.checked = !!on;
+    c.addEventListener("change", () => onChange(c.checked));
+    l.append(s, c);
+    return l;
+  }
+  function label(text, hint) {
+    const d = el("div", "set-label", text);
+    if (hint) d.appendChild(el("span", "set-hint", hint));
+    return d;
+  }
+  function status(text, cls) { return el("div", "jf-status" + (cls ? " " + cls : ""), text); }
+  function textRow(value, placeholder, buttonText, onSave, type) {
+    const row = el("div", "jf-row");
+    const inp = kbInput(el("input", "ui-input"));
+    inp.value = value || ""; inp.placeholder = placeholder || ""; if (type) inp.type = type;
+    const b = el("button", "btn btn--ghost btn--sm", buttonText || "Save");
+    b.addEventListener("pointerup", () => onSave(inp.value.trim(), inp));
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") onSave(inp.value.trim(), inp); });
+    row.append(inp, b);
+    return row;
+  }
+
+  let formFocusGuard = false;
+  function renderForm() {
+    const f = $("#jarvis-form");
+    if (!f || !JS) return;
+    // Never rebuild under a field being typed in.
+    if (f.contains(document.activeElement) && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) { formFocusGuard = true; return; }
+    formFocusGuard = false;
+    const scroll = f.scrollTop;
+    f.innerHTML = "";
+    const st = JST || {};
+    const local = st.local || {};
+    const vo = st.voice || {};
+
+    // ---- Brain
+    f.appendChild(label("Brain", "who answers"));
+    f.appendChild(chips([["auto", "Auto"], ["claude", "Claude"], ["local", "Local"]], JS.provider, (v) => saveSetting({ provider: v })));
+    const brainNote = JS.provider === "auto"
+      ? "Auto uses the local model when it is running, and Claude when it is not."
+      : JS.provider === "claude" ? "Every question goes to Claude." : "Every question goes to the local model.";
+    f.appendChild(status(brainNote));
+
+    // ---- Claude
+    f.appendChild(label("Claude"));
+    f.appendChild(chips([["claude-haiku-4-5", "Haiku 4.5 · fast"], ["claude-sonnet-5-5", "Sonnet 5.5"], ["claude-opus-5-5", "Opus 5.5"]],
+      JS.claudeModel, (v) => saveSetting({ claudeModel: v })));
+    if (!st.sdk) f.appendChild(status("The Anthropic SDK is missing from this build.", "bad"));
+    if (st.hasKey) {
+      const row = el("div", "jf-row");
+      row.appendChild(status("API key saved. It is never shown again.", "good"));
+      const rm = el("button", "btn btn--ghost btn--sm", "Remove key");
+      rm.addEventListener("pointerup", async () => { const r = await post("key", { clear: true }); if (r.status) JST = r.status; renderForm(); });
+      row.appendChild(rm);
+      f.appendChild(row);
+    } else {
+      f.appendChild(textRow("", "Paste an Anthropic API key (sk-ant-…)", "Save key", async (v, inp) => {
+        const r = await post("key", { key: v });
+        if (r.ok) { inp.value = ""; inp.blur(); JST = r.status; renderForm(); }
+        else { f.querySelector(".jf-keyerr") && f.querySelector(".jf-keyerr").remove(); const s = status(r.error, "bad jf-keyerr"); inp.parentNode.after(s); }
+      }, "password"));
+      f.appendChild(status("Get one at console.anthropic.com. It is stored in this PC's data folder and never sent anywhere but Anthropic."));
+    }
+
+    // ---- Local model
+    f.appendChild(label("Local model", "llama.cpp, jarvis-llm.bat"));
+    f.appendChild(chips([["jarvis-9b", "Qwen3.5 9B · smarter"], ["jarvis-4b", "Qwen3.5 4B · lighter"]], JS.localModel, (v) => saveSetting({ localModel: v })));
+    f.appendChild(toggle("Use the 4B while gaming", "a game in front swaps to the 4B and frees the 9B's VRAM", JS.autoGameModel, (v) => saveSetting({ autoGameModel: v })));
+    if (JS.autoGameModel && st.game) f.appendChild(status(st.game.on ? "Game in front now (" + (st.game.exe || "fullscreen") + ") — using the 4B." : "No game in front.", st.game.on ? "warn" : ""));
+    f.appendChild(status(local.up
+      ? "Running" + (local.loaded ? " · " + local.loaded + " loaded" : " · no model loaded yet (loads on the first question)") + " · next answer uses " + local.model
+      : "Not running.", local.up ? "good" : "warn"));
+    const lr = el("div", "jf-row");
+    for (const [act, text] of [["start", "Start"], ["stop", "Stop"], ["edit", "Edit bat"]]) {
+      const b = el("button", "btn btn--ghost btn--sm", text);
+      b.addEventListener("pointerup", async () => {
+        b.disabled = true;
+        const r = await post("local", { action: act });
+        if (r.status) JST = r.status;
+        if (!r.ok) { const s = status(r.error, "bad"); lr.after(s); setTimeout(() => s.remove(), 6000); }
+        b.disabled = false;
+        if (act === "start") setTimeout(refreshSettings, 4000);
+        renderForm();
+      });
+      lr.appendChild(b);
+    }
+    f.appendChild(lr);
+    f.appendChild(textRow(JS.localBat, "Path to jarvis-llm.bat", "Save", (v) => saveSetting({ localBat: v })));
+
+    // ---- Listening
+    f.appendChild(label("Listening"));
+    f.appendChild(toggle("Wake word “" + JS.wakePhrase + "”", "listens offline for the name; nothing leaves the PC until you ask something", JS.wake, (v) => saveSetting({ wake: v })));
+    const sens = el("div", "jf-slider");
+    sens.appendChild(el("span", null, "Fewer false wakes"));
+    const r1 = el("input", "ui-range");
+    r1.type = "range"; r1.min = "0.1"; r1.max = "0.9"; r1.step = "0.05"; r1.value = JS.sensitivity;
+    r1.addEventListener("change", () => saveSetting({ sensitivity: Number(r1.value) }));
+    sens.appendChild(r1);
+    sens.appendChild(el("span", null, "Hears it more easily"));
+    f.appendChild(sens);
+    f.appendChild(toggle("Online speech recognition", "far more accurate (it is what Win+H uses); off = everything stays on this PC",
+      JS.onlineSpeech, (v) => saveSetting({ onlineSpeech: v })));
+    if (JS.onlineSpeech && vo.onlineBlocked) {
+      f.appendChild(status("Windows is refusing online recognition. Turn on Settings › Privacy & security › Speech › Online speech recognition. Until then Jarvis falls back to offline.", "warn"));
+    }
+    if (vo.error) f.appendChild(status("Voice helper: " + vo.error, "bad"));
+    f.appendChild(status("Jarvis hears Windows' default recording device. Change it in Sound settings (or the Audio widget) if it isn't your mic."));
+
+    // ---- Voice
+    f.appendChild(label("Voice"));
+    f.appendChild(toggle("Speak replies", null, JS.speak, (v) => saveSetting({ speak: v })));
+    const voices = (vo.voices || []).filter((v) => /^en/i.test(v.lang));
+    if (voices.length) f.appendChild(chips(voices.map((v) => [v.name, v.name.replace(/^Microsoft /, "") + " · " + v.lang]), JS.voice, (v) => saveSetting({ voice: v })));
+    const rate = el("div", "jf-slider");
+    rate.appendChild(el("span", null, "Slower"));
+    const r2 = el("input", "ui-range");
+    r2.type = "range"; r2.min = "0.7"; r2.max = "1.6"; r2.step = "0.05"; r2.value = JS.rate;
+    r2.addEventListener("change", () => saveSetting({ rate: Number(r2.value) }));
+    rate.appendChild(r2);
+    rate.appendChild(el("span", null, "Faster"));
+    f.appendChild(rate);
+    const test = el("button", "btn btn--ghost btn--sm", "Test voice");
+    test.addEventListener("pointerup", () => {
+      speech.reset();
+      const saved = J.reply;
+      J.reply = "";
+      speech.feed("Good evening" + (JS.addressAs ? ", " + JS.addressAs : JS.name ? ", " + JS.name : "") + ". All systems are online.");
+      speech.end();
+      J.reply = saved;
+    });
+    f.appendChild(el("div", "jf-row")).appendChild(test);
+    f.appendChild(status("More voices: Windows Settings › Time & language › Speech › Add voices (an en-GB voice suits a Jarvis)."));
+
+    // ---- About you
+    f.appendChild(label("About you", "goes in every request"));
+    f.appendChild(textRow(JS.name, "Your name", "Save", (v) => saveSetting({ name: v })));
+    f.appendChild(textRow(JS.addressAs, "What Jarvis calls you (optional, e.g. sir)", "Save", (v) => saveSetting({ addressAs: v })));
+    const ta = kbInput(el("textarea", "ui-input jf-area"));
+    ta.value = JS.about || "";
+    ta.placeholder = "Anything Jarvis should always know: your routine, your setup, how you like answers…";
+    const taRow = el("div", "jf-row");
+    const taSave = el("button", "btn btn--ghost btn--sm", "Save");
+    taSave.addEventListener("pointerup", () => saveSetting({ about: ta.value }));
+    f.appendChild(ta);
+    taRow.appendChild(taSave);
+    f.appendChild(taRow);
+    f.appendChild(textRow(JS.home ? JS.home.name : "", "Home, for the weather (city, state)", "Set", async (v) => {
+      const r = await post("home", { place: v });
+      if (r.ok) { JS = r.settings; renderForm(); }
+      else { const s = status(r.error, "bad"); f.appendChild(s); setTimeout(() => s.remove(), 5000); }
+    }));
+
+    // ---- Memory
+    f.appendChild(label("Memory", facts.length ? facts.length + " remembered" : "say “remember that…”"));
+    const list = el("div", "jf-facts");
+    for (const fct of facts) {
+      const row = el("div", "jf-fact");
+      row.appendChild(el("span", null, fct.text));
+      const x = el("button", "btn btn--quiet btn--sm btn--icon", "✕");
+      x.addEventListener("pointerup", async () => { await post("memory", { forget: fct.id }); loadFacts(); });
+      row.appendChild(x);
+      list.appendChild(row);
+    }
+    f.appendChild(list);
+    f.appendChild(toggle("Also read a memory graph", "the MCP memory server's file, shared with your other assistant", JS.useGraph, (v) => saveSetting({ useGraph: v })));
+    if (JS.useGraph) f.appendChild(textRow(JS.graphFile, "Path to memory.json", "Save", (v) => saveSetting({ graphFile: v })));
+
+    f.scrollTop = scroll;
+  }
+
+  function wireSettingsView() {
+    $("#open-jarvis").addEventListener("pointerup", () => showJarvisView(true));
+    $("#jarvis-back").addEventListener("pointerup", () => showJarvisView(false));
+    $("#jarvis-close").addEventListener("pointerup", () => openDrawer(false));
+    // The drawer closing always lands back on its main view.
+    new MutationObserver(() => {
+      if (!$("#drawer").classList.contains("open") && jarvisViewOpen()) showJarvisView(false);
+    }).observe($("#drawer"), { attributes: true, attributeFilter: ["class"] });
+    // A field that blocked a rebuild gets it once it lets go.
+    $("#jarvis-form").addEventListener("focusout", () => setTimeout(() => { if (formFocusGuard) renderForm(); }, 50));
+  }
+
+  // ---------------------------------------------------------------- boot ----
+  function boot() {
+    wireButton();
+    wireClock();
+    wireSettingsView();
+    renderClock();
+    setInterval(renderClock, 15000);
+    setInterval(tick, 1000);
+    tick();
+    refreshSettings();
+    connect();
+    // Timers set in the widget appear here at once.
+    window.addEventListener("storage", (e) => {
+      if (e.key === TKEY) { timersSig = ""; renderAll(); }
+      if (e.key === AKEY) { renderAll(); renderClock(); }
+    });
+  }
+  boot();
+})();
