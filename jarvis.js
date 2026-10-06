@@ -1146,6 +1146,7 @@
     $("#jarvis-view").classList.toggle("hidden", !on);
     $(".drawer-inner").classList.toggle("hidden", on);
     if (on) { refreshSettings(); loadFacts(); }
+    micPolling(on);
   }
   let facts = [];
   async function loadFacts() {
@@ -1304,7 +1305,18 @@
       f.appendChild(status("Windows is refusing online recognition. Turn on Settings › Privacy & security › Speech › Online speech recognition. Until then Jarvis falls back to offline.", "warn"));
     }
     if (vo.error) f.appendChild(status("Voice helper: " + vo.error, "bad"));
-    f.appendChild(status("Jarvis hears Windows' default recording device. Change it in Sound settings (or the Audio widget) if it isn't your mic."));
+
+    // ---- Microphone
+    // Windows' online recognizer can only use the default recording device, so
+    // that is what Jarvis hears. Show which one it is, whether anything is
+    // coming in, and make switching one tap. (Seen on this PC: the default was
+    // a Voicemeeter bus while Voicemeeter was closed — silence.)
+    f.appendChild(label("Microphone", "Jarvis hears Windows' default input"));
+    const mics = el("div", "jf-mics");
+    mics.id = "jf-mics";
+    f.appendChild(mics);
+    f.appendChild(status("Changing it changes Windows' default input, which other apps on “Default” (Discord) follow too."));
+    renderMics();
 
     // ---- Voice
     f.appendChild(label("Voice"));
@@ -1366,6 +1378,75 @@
     if (JS.useGraph) f.appendChild(textRow(JS.graphFile, "Path to memory.json", "Save", (v) => saveSetting({ graphFile: v })));
 
     f.scrollTop = scroll;
+  }
+
+  // Input list with live meters. Rows are rebuilt only when the devices or the
+  // default change; the meters update in place. The list element is looked up
+  // AFTER the fetch, and remembers what it was built from itself: the form is
+  // rebuilt while requests are in flight, and rows built into the element that
+  // existed before the await went into a detached node (an empty list, found
+  // the hard way).
+  let micPoll = null, silentFor = 0, allMics = false;
+  // Mixer buses and virtual cables, hidden unless one is the default (the same
+  // filter the Audio widget uses).
+  const VIRTUAL = /Voicemeeter|CABLE|Steam Streaming/i;
+  async function renderMics() {
+    if (!document.getElementById("jf-mics")) return;
+    const s = await fetch("/api/system").then((r) => r.json()).catch(() => null);
+    const box = document.getElementById("jf-mics");
+    if (!box) return;
+    const every = ((s && s.audio && s.audio.inputs) || []).slice().sort((a, b) => (b.isDefault ? 1 : 0) - (a.isDefault ? 1 : 0));
+    const ins = allMics ? every : every.filter((d) => d.isDefault || !VIRTUAL.test(d.name));
+    if (!ins.length) { box.textContent = s && s.warming ? "Reading devices…" : "No input devices found."; return; }
+    const sig = (allMics ? "all:" : "") + ins.map((d) => d.id + (d.isDefault ? "*" : "")).join("|");
+    if (sig !== box.dataset.sig) {
+      box.dataset.sig = sig;
+      silentFor = 0;
+      box.innerHTML = "";
+      for (const d of ins) {
+        const row = el("div", "jf-mic" + (d.isDefault ? " is-default" : ""));
+        row.dataset.id = d.id;
+        row.appendChild(el("span", "nm", d.name.replace(/\s*\(VB-Audio[^)]*\)/, "")));
+        const m = el("span", "jf-meter");
+        m.appendChild(el("i"));
+        row.appendChild(m);
+        if (d.isDefault) row.appendChild(el("span", "badge", "Jarvis hears this"));
+        else {
+          const b = el("button", "btn btn--ghost btn--sm", "Use this");
+          b.addEventListener("pointerup", async () => {
+            b.disabled = true;
+            await fetch("/api/system", { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ cmd: "audio.setInput", args: { id: d.id } }) }).catch(() => {});
+            setTimeout(renderMics, 600);
+          });
+          row.appendChild(b);
+        }
+        box.appendChild(row);
+      }
+      const hidden = every.length - ins.length;
+      if (hidden > 0 || allMics) {
+        const more = el("button", "btn btn--quiet btn--sm", allMics ? "Hide mixer buses and cables" : "Show all inputs (" + hidden + " more)");
+        more.addEventListener("pointerup", () => { allMics = !allMics; renderMics(); });
+        box.appendChild(more);
+      }
+      box.appendChild(el("div", "jf-status warn jf-silent")).hidden = true;
+    }
+    for (const d of ins) {
+      const row = box.querySelector('.jf-mic[data-id="' + CSS.escape(d.id) + '"]');
+      // Peak is linear; a square root makes speech-level input fill the bar.
+      if (row) row.querySelector(".jf-meter i").style.width = Math.min(100, Math.sqrt(d.peak || 0) * 160).toFixed(0) + "%";
+    }
+    const def = ins.find((d) => d.isDefault);
+    silentFor = def && !(def.peak > 0) ? silentFor + 1 : 0;
+    const warn = box.querySelector(".jf-silent");
+    if (warn) {
+      warn.hidden = silentFor < 4;
+      warn.textContent = def ? "Nothing is coming in on " + def.name + ". If that isn't your mic (or it is a mixer bus that isn't running), pick the one that moves when you talk." : "";
+    }
+  }
+  function micPolling(on) {
+    clearInterval(micPoll);
+    micPoll = on ? setInterval(() => { if (jarvisViewOpen()) renderMics(); else micPolling(false); }, 800) : null;
   }
 
   function wireSettingsView() {

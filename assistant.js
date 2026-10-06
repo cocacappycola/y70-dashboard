@@ -859,6 +859,9 @@ async function runLoop(conv, emit, signal) {
     emit({ type: "thinking", provider });
     const r = provider === "claude" ? await claudeStep(conv, emit, signal, last) : await localStep(conv, emit, signal, last);
     conv.model = r.model;
+    // Claude rejects an assistant turn with no content, and a conversation can
+    // move to Claude after the local model came back with nothing at all.
+    if (!r.content.length) r.content = [{ type: "text", text: "(no answer)" }];
     conv.messages.push({ role: "assistant", content: r.content });
     for (const b of r.content) if (b.type === "text") conv.log.reply += b.text;
 
