@@ -63,15 +63,36 @@ box to type into instead.
    Gated repos (Llama, Gemma's originals) need a Hugging Face login it doesn't
    have.
 4. **Hearing.** The wake word is recognised offline by Windows' own engine and
-   nothing leaves the PC until you ask something. The request itself is heard by
-   Windows' **online** recognizer when *Online speech recognition* is on in
-   Jarvis's settings — the one Win+H uses, far more accurate — which also needs
-   **Windows Settings › Privacy & security › Speech › Online speech recognition**.
-   With either off, the offline recognizer does the job (it mishears much more).
-   Jarvis listens on Windows' **default recording device** — currently a
-   Voicemeeter bus on this PC, so route your mic to it or change the default.
-5. **Voice.** Any installed Windows voice; an en-GB one (Settings › Time &
-   language › Speech › Add voices) suits a Jarvis.
+   nothing leaves the PC until you ask something. The request itself goes to
+   **Whisper** (whisper.cpp, `ggml-large-v3-turbo-q5_0`, on the GPU, in
+   `E:\OLLAMAMODEL2026\whisper`): Windows' engine still listens — it knows when
+   you have finished and shows the words as you speak — and the audio it heard
+   goes to `whisper-server` (port 8082, resident, ~600 MB of VRAM) for the words
+   themselves. Measured on the same audio: Windows offline heard "place on low
+   Fi beads on spot if I", Whisper "play some lo-fi beats on Spotify", in 65–80 ms
+   (0.4 s for the first after loading). It is biased toward your vocabulary
+   (Jarvis, Spotify, Govee…) with an initial prompt, and Whisper's known
+   inventions on near-silence ("Thank you.", "[BLANK_AUDIO]") are dropped.
+   The alternatives are Windows' online recognizer (needs **Settings › Privacy &
+   security › Speech › Online speech recognition**) and its offline one.
+   Jarvis listens on Windows' **default recording device**; Settings → Jarvis →
+   Microphone shows which one that is, with a live meter.
+   
+   **Interrupting.** While he talks the mic keeps listening: "Jarvis…" starts a
+   new request and "stop" / "that's enough" / "never mind" ends the answer. The
+   helper is told the sentence he is saying, so his own voice through speakers
+   cannot trip either (a "stop" inside his own sentence is ignored, as is him
+   saying his name). *Interrupt by just talking* (off by default; for
+   headphones) stops him on any speech that is not an echo of his sentence.
+   Tapping the orb always stops him.
+5. **Voice.** **Kokoro-82M** (`tts-kokoro.py`, kokoro-onnx, in
+   `E:\OLLAMAMODEL2026\tts`), resident and on the CPU so it takes no VRAM: about
+   0.5 s a sentence, and the panel asks for the next sentence while the current
+   one plays. 28 English voices; the British men (George — the default —
+   Lewis, Daniel, Fable) suit a Jarvis, and British voices get British
+   pronunciation. Needs `pip install kokoro-onnx` plus `kokoro-v1.0.onnx` and
+   `voices-v1.0.bin`. The Windows voices are the fallback whenever Kokoro is
+   missing or fails.
 6. **About you / memory.** Name, what to call you, free text, home for the
    weather. Memory is **one memory shared with the web UI**: the MCP memory
    server's knowledge graph (`E:\OLLAMAMODEL2026\memory.json`). Jarvis writes
@@ -893,6 +914,7 @@ wscript "autostart-hidden.vbs" 0
 | `search-ddgs.py` | Search through the `ddgs` Python library when it is installed |
 | `assistant-models.js` | Local models: Hugging Face search, confirmed downloads, adding to the preset |
 | `govee.js` | Govee lights over the LAN API (and the cloud API, with a key) |
+| `tts-kokoro.py` | Jarvis's voice: Kokoro-82M, resident, one WAV per sentence |
 | `jarvis.js` / `jarvis.css` | Status bar, the island, alarms + timers, Jarvis's card and settings |
 | `voice/Program.cs` | Voice helper — wake word, online/offline dictation, voices, game probe |
 | `index.html` | UI layout |

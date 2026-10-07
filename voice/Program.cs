@@ -42,7 +42,23 @@ internal static class Program
     static bool _wakeWanted;
     static double _wakeMin = 0.5;       // word confidence the name must reach
     static volatile bool _listening;     // a request is being heard
-    static volatile bool _speaking;      // Jarvis is talking; don't wake on his own voice
+    static volatile bool _speaking;      // Jarvis is talking
+
+    // ---- interrupting him
+    // While he talks the mic still listens: "Jarvis..." starts a new request and
+    // "stop" ends the answer. What he is saying right now is kept so his own
+    // voice, coming back through speakers, cannot set either off.
+    static string _speakingText = "";
+    static Sapi.Grammar _stopGrammar;
+    static bool _stopWords = true;       // "stop", "that's enough"... while he talks
+    static bool _bargeIn;                // any speech that isn't him interrupts (headphones)
+    static bool _bargeFired;
+
+    // ---- audio for Whisper
+    // When on, a heard request carries its own audio (WAV) so the server can
+    // have Whisper transcribe it; SAPI then only finds where speech starts and
+    // ends and shows the live words.
+    static bool _audioOut;
 
     // ---- request dictation
     static CancellationTokenSource _listenCts;
@@ -90,17 +106,26 @@ internal static class Program
                 if (!string.IsNullOrWhiteSpace(ph)) _phrase = ph.Trim().ToLowerInvariant();
                 if (m.TryGetProperty("sensitivity", out var s) && s.TryGetDouble(out var sv))
                     _wakeMin = Math.Clamp(1.0 - sv, 0.2, 0.9);   // more sensitive = lower bar
+                _stopWords = Bool(m, "stopWords", _stopWords);
+                _bargeIn = Bool(m, "bargeIn", _bargeIn);
+                _audioOut = Bool(m, "audio", _audioOut);
                 if (_wakeWanted) StartWake(); else StopWake();
                 Emit(new { type = "wake-state", on = _wake != null, phrase = _phrase });
                 break;
             case "listen":
-                _ = Listen(Bool(m, "online", true), Int(m, "maxSeconds", 20));
+                // audio:true = record for Whisper (SAPI segments, no online).
+                var withAudio = Bool(m, "audio", false);
+                _ = Listen(!withAudio && Bool(m, "online", true), Int(m, "maxSeconds", 20), withAudio);
                 break;
             case "cancel":
                 try { _listenCts?.Cancel(); } catch { }
                 break;
             case "speaking":
+                var was = _speaking;
                 _speaking = Bool(m, "on", false);
+                _speakingText = _speaking ? (Str(m, "text") ?? _speakingText) : "";
+                if (_speaking && !was) _bargeFired = false;
+                try { if (_stopGrammar != null) _stopGrammar.Enabled = _speaking && _stopWords; } catch { }
                 break;
             case "speak":
                 _ = Speak(m);
@@ -114,10 +139,17 @@ internal static class Program
             // Test hooks: run the offline recognizers over a WAV file instead of
             // the microphone, so the grammar can be checked without a person.
             case "test-wake":
-                _ = TestWake(Str(m, "path"));
+                _bargeIn = Bool(m, "bargeIn", _bargeIn);
+                _audioOut = Bool(m, "audio", _audioOut);
+                _ = TestWake(Str(m, "path"), Bool(m, "speaking", false), Str(m, "speakingText"));
                 break;
             case "test-dictate":
                 _ = TestDictate(Str(m, "path"));
+                break;
+            // A whole request heard from a WAV file, through the same events a
+            // real one sends (listening, partial, final with audio).
+            case "test-listen":
+                _ = TestListen(Str(m, "path"));
                 break;
             case "tts-file":
                 _ = TtsToFile(Str(m, "text"), Str(m, "path"), Str(m, "voice"));
@@ -146,13 +178,59 @@ internal static class Program
     // speech is not forced into the nearest match to the name.
     static Sapi.Grammar GarbageGrammar() => new Sapi.DictationGrammar { Name = "garbage" };
 
+    // Ways to cut him off. Only enabled while he is talking, and given priority
+    // over the dictation grammar, which would otherwise claim a lone "stop".
+    static readonly string[] StopPhrases = {
+        "stop", "stop it", "stop talking", "that's enough", "enough", "be quiet", "quiet",
+        "shut up", "never mind", "cancel", "okay stop", "ok stop", "thanks", "thank you", "got it",
+    };
+    static Sapi.Grammar StopGrammar()
+    {
+        var c = new Sapi.Choices(StopPhrases.Concat(StopPhrases.Select(p => _phrase + " " + p)).ToArray());
+        return new Sapi.Grammar(new Sapi.GrammarBuilder(c) { Culture = EnUs }) { Name = "stop", Priority = 10 };
+    }
+
     static Sapi.SpeechRecognitionEngine NewWakeEngine()
     {
         var eng = new Sapi.SpeechRecognitionEngine(EnUs);
-        eng.LoadGrammar(WakeGrammar());
+        var wake = WakeGrammar();
+        wake.Priority = 5;
+        eng.LoadGrammar(wake);
         eng.LoadGrammar(GarbageGrammar());
+        _stopGrammar = StopGrammar();
+        _stopGrammar.Enabled = _speaking && _stopWords;
+        eng.LoadGrammar(_stopGrammar);
         eng.SpeechRecognized += OnWakeHeard;
+        eng.SpeechHypothesized += OnHeardWhileTalking;
         return eng;
+    }
+
+    // ---- telling his voice from yours ----
+    static string[] Words(string s) =>
+        Regex.Matches((s ?? "").ToLowerInvariant(), "[a-z0-9']+").Select(x => x.Value).ToArray();
+
+    // How much of what was heard is just what he is saying right now. Through
+    // speakers the mic hears his sentence; that should never interrupt him.
+    static double EchoOf(string heard)
+    {
+        var h = Words(heard);
+        if (h.Length == 0 || string.IsNullOrEmpty(_speakingText)) return 0;
+        var said = new HashSet<string>(Words(_speakingText));
+        return h.Count(w => said.Contains(w)) / (double)h.Length;
+    }
+
+    // Talk-over: any speech while he talks that is not an echo of him stops him
+    // and opens the mic. Only with bargeIn on — without headphones a room can
+    // make his own voice unrecognisable enough to slip past the echo check.
+    static void OnHeardWhileTalking(object sender, Sapi.SpeechHypothesizedEventArgs e)
+    {
+        if (!_speaking || !_bargeIn || _bargeFired || _listening) return;
+        var r = e.Result;
+        if (r == null || r.Grammar?.Name == "stop") return;
+        var w = Words(r.Text);
+        if (w.Length < 2 || EchoOf(r.Text) >= 0.5) return;
+        _bargeFired = true;
+        Emit(new { type = "barge", text = r.Text });
     }
 
     static void StartWake()
@@ -177,8 +255,9 @@ internal static class Program
         var eng = _wake;
         _wake = null;
         if (eng == null) return;
-        try { eng.SpeechRecognized -= OnWakeHeard; eng.RecognizeAsyncCancel(); } catch { }
+        try { eng.SpeechRecognized -= OnWakeHeard; eng.SpeechHypothesized -= OnHeardWhileTalking; eng.RecognizeAsyncCancel(); } catch { }
         try { eng.Dispose(); } catch { }
+        _stopGrammar = null;
     }
 
     static void OnWakeHeard(object sender, Sapi.SpeechRecognizedEventArgs e) => HandleWake(e.Result, false);
@@ -188,12 +267,25 @@ internal static class Program
     static void HandleWake(Sapi.RecognitionResult r, bool test)
     {
         if (r == null) return;
-        if (r.Grammar?.Name != "wake")
+        var g = r.Grammar?.Name;
+        if (g == "stop")
         {
-            if (test) Emit(new { type = "test-heard", grammar = r.Grammar?.Name, text = r.Text, confidence = r.Confidence });
+            // Only while he is talking, and never his own words coming back.
+            if (!test && (!_speaking || !_stopWords)) return;
+            if (!test && EchoOf(r.Text) >= 0.99 && Words(_speakingText).Length > Words(r.Text).Length) return;
+            if (r.Confidence < 0.55) { Emit(new { type = "stop-rejected", confidence = Math.Round(r.Confidence, 3), text = r.Text }); return; }
+            Emit(new { type = "stop", text = r.Text, confidence = Math.Round(r.Confidence, 3), test });
             return;
         }
-        if (!test && (_listening || _speaking)) return;
+        if (g != "wake")
+        {
+            if (test) Emit(new { type = "test-heard", grammar = g, text = r.Text, confidence = r.Confidence });
+            return;
+        }
+        if (!test && _listening) return;
+        // While he talks, the name interrupts him — unless he is the one
+        // saying it.
+        if (!test && _speaking && Words(_speakingText).Contains(_phrase)) return;
         var nameWord = r.Words.FirstOrDefault(w => string.Equals(w.Text, _phrase, StringComparison.OrdinalIgnoreCase));
         var conf = nameWord?.Confidence ?? r.Confidence;
         if (conf < _wakeMin)
@@ -204,18 +296,34 @@ internal static class Program
         // What followed the name, if anything.
         var text = Lead.Replace(r.Text, "");
         var tail = Regex.Replace(text, "^" + Regex.Escape(_phrase) + @"[\s,.!?]*", "", RegexOptions.IgnoreCase).Trim();
-        Emit(new { type = "wake", confidence = Math.Round(conf, 3), tail, test });
+        // With Whisper on, a request said in the same breath travels with its
+        // audio, so it can be transcribed properly instead of taken from SAPI.
+        string audio = null;
+        if (_audioOut && tail.Length > 0) audio = WavBase64(r.Audio);
+        Emit(new { type = "wake", confidence = Math.Round(conf, 3), tail, test, interrupted = _speaking, audio });
+    }
+
+    static string WavBase64(Sapi.RecognizedAudio a)
+    {
+        if (a == null) return null;
+        try
+        {
+            using var ms = new MemoryStream();
+            a.WriteToWaveStream(ms);
+            return Convert.ToBase64String(ms.ToArray());
+        }
+        catch { return null; }
     }
 
     // ========================================================= requests ====
-    static async Task Listen(bool online, int maxSeconds)
+    static async Task Listen(bool online, int maxSeconds, bool withAudio)
     {
         if (_listening) return;
         _listening = true;
         StopWake();
         _listenCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(maxSeconds, 3, 60)));
         var ct = _listenCts.Token;
-        string text = null, engine = null, reason = null;
+        string text = null, engine = null, reason = null, audio = null;
         try
         {
             if (online)
@@ -234,16 +342,18 @@ internal static class Program
             }
             if (!online && !ct.IsCancellationRequested)
             {
-                Emit(new { type = "listening", engine = "offline" });
-                text = await ListenOffline(ct, null);
-                engine = "offline";
+                Emit(new { type = "listening", engine = withAudio ? "whisper" : "offline" });
+                var r = await ListenOffline(ct, null);
+                text = r.text;
+                if (withAudio) audio = r.audio;
+                engine = withAudio ? "whisper" : "offline";
             }
         }
         catch (Exception e) { reason = e.Message; }
         finally
         {
             _listening = false;
-            Emit(new { type = "final", text = text ?? "", engine, reason = ct.IsCancellationRequested && text == null ? "cancelled" : reason });
+            Emit(new { type = "final", text = text ?? "", engine, audio, reason = ct.IsCancellationRequested && text == null ? "cancelled" : reason });
             StartWake();
         }
     }
@@ -286,16 +396,25 @@ internal static class Program
         }
     }
 
-    // SAPI dictation, from the microphone or (for tests) a WAV file.
-    static async Task<string> ListenOffline(CancellationToken ct, string wavPath)
+    // SAPI dictation, from the microphone or (for tests) a WAV file. Returns
+    // the words SAPI heard and the audio it heard them in (WAV, base64): with
+    // Whisper on, SAPI is only the ears that know when you have finished.
+    static async Task<(string text, string audio)> ListenOffline(CancellationToken ct, string wavPath)
     {
-        var done = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var done = new TaskCompletionSource<(string, string)>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var eng = new Sapi.SpeechRecognitionEngine(EnUs);
         eng.LoadGrammar(new Sapi.DictationGrammar());
         if (wavPath != null) eng.SetInputToWaveFile(wavPath); else eng.SetInputToDefaultAudioDevice();
         eng.InitialSilenceTimeout = TimeSpan.FromSeconds(6);
-        eng.EndSilenceTimeout = TimeSpan.FromSeconds(0.9);
+        // A beat longer than SAPI's own default, so a breath mid-sentence does
+        // not end the request.
+        eng.EndSilenceTimeout = TimeSpan.FromSeconds(1.0);
         eng.BabbleTimeout = TimeSpan.FromSeconds(4);
+        // A rejected utterance (too unsure to name) still has its audio, which
+        // Whisper may well make sense of.
+        Sapi.RecognitionResult heard = null;
+        eng.SpeechRecognized += (_, e) => heard = e.Result;
+        eng.SpeechRecognitionRejected += (_, e) => { if (heard == null) heard = e.Result; };
         eng.SpeechHypothesized += (_, e) => Emit(new { type = "partial", text = e.Result.Text });
         var lastLevel = 0L;
         eng.AudioLevelUpdated += (_, e) =>
@@ -305,7 +424,11 @@ internal static class Program
             lastLevel = now;
             Emit(new { type = "level", v = e.AudioLevel });
         };
-        eng.RecognizeCompleted += (_, e) => done.TrySetResult(e.Result?.Text);
+        eng.RecognizeCompleted += (_, e) =>
+        {
+            var r = e.Result ?? heard;
+            done.TrySetResult((e.Result?.Text, WavBase64(r?.Audio)));
+        };
         eng.RecognizeAsync(Sapi.RecognizeMode.Single);
         using (ct.Register(() => { try { eng.RecognizeAsyncCancel(); } catch { } }))
             return await done.Task;
@@ -425,24 +548,37 @@ internal static class Program
     }
 
     // ============================================================ tests ====
-    static async Task TestWake(string path)
+    // The live wake engine (all three grammars, every guard) over a WAV file.
+    // With speaking set, it behaves as if Jarvis were in the middle of saying
+    // speakingText — which is how interruptions are tested without a person.
+    static async Task TestWake(string path, bool speaking, string speakingText)
     {
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var eng = new Sapi.SpeechRecognitionEngine(EnUs);
-        eng.LoadGrammar(WakeGrammar());
-        eng.LoadGrammar(GarbageGrammar());
-        eng.SpeechRecognized += (_, e) => HandleWake(e.Result, true);
+        var wasSpeaking = _speaking; var wasText = _speakingText;
+        _speaking = speaking; _speakingText = speakingText ?? ""; _bargeFired = false;
+        using var eng = NewWakeEngine();
+        eng.SpeechRecognized -= OnWakeHeard;
+        eng.SpeechRecognized += (_, e) => { Emit(new { type = "test-heard", grammar = e.Result.Grammar?.Name, text = e.Result.Text, confidence = Math.Round(e.Result.Confidence, 3) }); HandleWake(e.Result, false); };
         eng.RecognizeCompleted += (_, _) => done.TrySetResult(true);
         eng.SetInputToWaveFile(path);
         eng.RecognizeAsync(Sapi.RecognizeMode.Multiple);
         await done.Task;
-        Emit(new { type = "test-done", what = "wake", path });
+        eng.SpeechHypothesized -= OnHeardWhileTalking;
+        _speaking = wasSpeaking; _speakingText = wasText;
+        Emit(new { type = "test-done", what = "wake", path, speaking });
+    }
+
+    static async Task TestListen(string path)
+    {
+        Emit(new { type = "listening", engine = "whisper" });
+        var (text, audio) = await ListenOffline(CancellationToken.None, path);
+        Emit(new { type = "final", text = text ?? "", engine = "whisper", audio, reason = (string)null });
     }
 
     static async Task TestDictate(string path)
     {
-        var text = await ListenOffline(CancellationToken.None, path);
-        Emit(new { type = "test-done", what = "dictate", path, text });
+        var (text, audio) = await ListenOffline(CancellationToken.None, path);
+        Emit(new { type = "test-done", what = "dictate", path, text, audioBytes = audio == null ? 0 : audio.Length * 3 / 4, audio });
     }
 
     static async Task TtsToFile(string text, string path, string voice)

@@ -48,9 +48,17 @@ const DEFAULTS = {
   wake: true,
   wakePhrase: "jarvis",
   sensitivity: 0.5,
-  onlineSpeech: true,               // Windows online recognizer, offline fallback
+  onlineSpeech: true,               // (older setting; stt replaces it)
+  stt: "",                          // whisper | online | offline; "" = from onlineSpeech
+  whisperDir: "",                   // whisper.cpp: Release\whisper-server.exe + a ggml model
+  whisperGpu: true,
+  stopWords: true,                  // "stop" / "Jarvis..." cut him off while he talks
+  bargeIn: false,                   // just talking over him interrupts (headphones)
   speak: true,
-  voice: "Microsoft Mark",
+  tts: "",                          // kokoro | windows; "" = Kokoro when installed
+  kokoroDir: "",                    // kokoro-v1.0.onnx + voices-v1.0.bin
+  kokoroVoice: "bm_george",
+  voice: "Microsoft Mark",          // the Windows voice (fallback)
   rate: 1.05,
   name: "",
   addressAs: "",
@@ -81,10 +89,19 @@ function saveSettings(patch) {
   next.sensitivity = Math.max(0, Math.min(1, Number(next.sensitivity) || 0.5));
   next.rate = Math.max(0.6, Math.min(2, Number(next.rate) || 1));
   next.wakePhrase = String(next.wakePhrase || "jarvis").trim().toLowerCase().slice(0, 30) || "jarvis";
-  for (const k of ["name", "addressAs", "voice", "localBat", "graphFile", "localUrl", "memoryUrl"]) next[k] = String(next[k] || "").slice(0, 400);
+  for (const k of ["name", "addressAs", "voice", "localBat", "graphFile", "localUrl", "memoryUrl", "whisperDir", "kokoroDir"]) next[k] = String(next[k] || "").slice(0, 400);
+  if (!["", "kokoro", "windows"].includes(next.tts)) next.tts = "";
+  if (!/^[a-z]{2}_[a-z]+$/.test(String(next.kokoroVoice || ""))) next.kokoroVoice = DEFAULTS.kokoroVoice;
+  if (!["", "whisper", "online", "offline"].includes(next.stt)) next.stt = "";
   next.about = String(next.about || "").slice(0, 4000);
+  const prev = settings;
   settings = next;
   try { fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2)); } catch (e) { return e.message; }
+  // Whisper restarts to pick up GPU/CPU or a new folder, and stops (freeing
+  // its VRAM) when another recognizer is chosen.
+  if (prev && (prev.whisperGpu !== next.whisperGpu || prev.whisperDir !== next.whisperDir || sttEngine() !== "whisper")) whisperStop();
+  if (prev && (prev.kokoroDir !== next.kokoroDir || ttsEngine() !== "kokoro")) { kokoroStop(); if (prev.kokoroDir !== next.kokoroDir) kokoro.err = null; }
+  if (ttsEngine() === "kokoro") kokoroStart();
   applyVoiceSettings();
   return null;
 }
@@ -165,10 +182,120 @@ function voiceStart() {
   return true;
 }
 
+// Which recognizer hears a request. Whisper when it is installed and chosen;
+// otherwise Windows online (falls back to offline itself) or offline.
+function sttEngine() {
+  const want = settings.stt || (settings.onlineSpeech ? "online" : "offline");
+  if (want === "whisper" && !whisperPaths()) return settings.onlineSpeech ? "online" : "offline";
+  return want;
+}
+
 function applyVoiceSettings() {
   if (!voice.proc || !voice.ready) return;
-  voiceSend({ cmd: "wake", on: !!settings.wake, phrase: settings.wakePhrase, sensitivity: settings.sensitivity });
+  voiceSend({
+    cmd: "wake", on: !!settings.wake, phrase: settings.wakePhrase, sensitivity: settings.sensitivity,
+    stopWords: settings.stopWords !== false, bargeIn: !!settings.bargeIn, audio: sttEngine() === "whisper",
+  });
   voiceSend({ cmd: "game", on: !!settings.autoGameModel });
+  if (sttEngine() === "whisper") whisperStart();
+}
+
+// ------------------------------------------------------------------ whisper --
+//  whisper.cpp's server, resident on 8082 with the model loaded, so a request
+//  is transcribed in well under a second (measured 65-80 ms on the 4080 for a
+//  sentence, about 0.4 s on the first after loading). SAPI still does the
+//  listening: it hears the wake word, knows when you have stopped talking and
+//  shows the words as you go; the audio it heard then goes to Whisper for the
+//  words themselves ("place on low Fi beads on spot if I" became "play some
+//  lo-fi beats on Spotify").
+const WHISPER_PORT = 8082;
+const whisper = { proc: null, ready: false, starting: null, err: null };
+
+function whisperPaths() {
+  const dir = settings.whisperDir;
+  if (!dir) return null;
+  const exe = [path.join(dir, "Release", "whisper-server.exe"), path.join(dir, "whisper-server.exe")].find((p) => fs.existsSync(p));
+  if (!exe) return null;
+  let models = [];
+  try { models = fs.readdirSync(dir).filter((f) => /^ggml-.*\.bin$/i.test(f)); } catch (e) {}
+  // The best model present: large-v3-turbo, then medium, small, base.
+  const order = ["large-v3-turbo", "large", "medium", "small", "base", "tiny"];
+  models.sort((a, b) => order.findIndex((o) => a.includes(o)) - order.findIndex((o) => b.includes(o)));
+  if (!models.length) return null;
+  return { exe, model: path.join(dir, models[0]), name: models[0] };
+}
+
+async function whisperProbe() {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 800);
+    const r = await fetch("http://127.0.0.1:" + WHISPER_PORT + "/", { signal: ctl.signal });
+    clearTimeout(t);
+    return r.status > 0;
+  } catch (e) { return false; }
+}
+
+function whisperStart() {
+  if (whisper.ready) return Promise.resolve(true);
+  if (whisper.starting) return whisper.starting;
+  whisper.starting = (async () => {
+    // Already up (left over from a restart): use it.
+    if (await whisperProbe()) { whisper.ready = true; return true; }
+    const p = whisperPaths();
+    if (!p) { whisper.err = "whisper.cpp is not installed"; return false; }
+    // Names it should expect, so it spells them the way you do.
+    const prompt = [settings.name, "Jarvis", "Spotify", "Discord", "Govee", "Qwen", "Hugging Face", "lo-fi"].filter(Boolean).join(", ") + ".";
+    const args = ["-m", p.model, "--host", "127.0.0.1", "--port", String(WHISPER_PORT), "-t", "8", "-l", "en", "--prompt", prompt];
+    if (!settings.whisperGpu) args.push("-ng");
+    const child = spawn(p.exe, args, { cwd: path.dirname(p.exe), windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    whisper.proc = child;
+    child.stderr.on("data", (d) => { const s = String(d); if (/error|fail/i.test(s)) whisper.err = s.slice(0, 200).trim(); });
+    child.on("exit", () => { whisper.proc = null; whisper.ready = false; });
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (await whisperProbe()) { whisper.ready = true; whisper.err = null; return true; }
+      if (!whisper.proc) break;
+    }
+    whisper.err = whisper.err || "whisper-server did not start";
+    return false;
+  })().finally(() => { whisper.starting = null; broadcast({ type: "status", status: status() }); });
+  return whisper.starting;
+}
+
+function whisperStop() {
+  if (whisper.proc) { try { whisper.proc.kill(); } catch (e) {} }
+  whisper.proc = null;
+  whisper.ready = false;
+}
+
+// What Whisper says on near-silence instead of nothing.
+const PHANTOM = /^(\[?blank_audio\]?|\(.*\)|\[.*\]|thank you\.?|thanks for watching!?|you\.?|bye\.?|\.+)$/i;
+
+async function transcribe(b64) {
+  if (!b64) return null;
+  if (!(await whisperStart())) return null;
+  try {
+    const fd = new FormData();
+    fd.append("file", new Blob([Buffer.from(b64, "base64")], { type: "audio/wav" }), "speech.wav");
+    fd.append("temperature", "0");
+    fd.append("response_format", "json");
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 15000);
+    const r = await fetch("http://127.0.0.1:" + WHISPER_PORT + "/inference", { method: "POST", body: fd, signal: ctl.signal });
+    clearTimeout(t);
+    const j = await r.json();
+    const text = String(j.text || "").replace(/\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim();
+    return PHANTOM.test(text) ? "" : text;
+  } catch (e) {
+    whisper.ready = false;
+    return null;
+  }
+}
+
+// The wake phrase off the front of what was said in one breath.
+function stripWake(text) {
+  const ph = settings.wakePhrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(text || "").replace(new RegExp("^\\s*(?:(?:hey|okay|ok)[\\s,]+)?" + ph + "[\\s,.!?:;-]*", "i"), "").trim();
 }
 
 function onVoice(m) {
@@ -191,6 +318,21 @@ function onVoice(m) {
     case "final":
       voice.listening = false;
       if (m.engine === "online") voice.onlineBlocked = false;
+      // Whisper's words replace SAPI's, a beat later. SAPI's stand if Whisper
+      // is unavailable.
+      if (m.audio) {
+        const audio = m.audio;
+        delete m.audio;
+        broadcast({ type: "transcribing" });
+        return void transcribeFinal(m, audio);
+      }
+      break;
+    case "wake":
+      if (m.audio) {
+        const audio = m.audio;
+        delete m.audio;
+        return void transcribeWake(m, audio);
+      }
       break;
     case "online-unavailable":
       voice.onlineBlocked = true;
@@ -207,7 +349,115 @@ function onVoice(m) {
   broadcast(m);
 }
 
-function speak(text) {
+async function transcribeFinal(m, audio) {
+  const t = await transcribe(audio);
+  if (t !== null) { m.sapi = m.text; m.text = t; m.engine = "whisper"; }
+  else m.engine = "offline";
+  broadcast(m);
+}
+
+// "Jarvis, set a timer" in one breath: Whisper re-hears the whole utterance and
+// the name comes off the front. If Whisper only hears the name, the panel
+// listens for the rest as usual.
+async function transcribeWake(m, audio) {
+  const t = await transcribe(audio);
+  if (t) { m.sapiTail = m.tail; m.tail = stripWake(t); m.whisper = true; }
+  broadcast(m);
+}
+
+// ------------------------------------------------------------------- kokoro --
+//  Jarvis's real voice: Kokoro-82M (tts-kokoro.py, kokoro-onnx), resident so
+//  the model stays loaded. On the CPU, so it takes no VRAM from games or the
+//  local models: about 0.5 s for a sentence (measured), and the panel asks
+//  for the next sentence while the current one plays. The Windows voices are
+//  the fallback whenever it is missing or fails.
+const kokoro = { proc: null, buf: "", ready: false, starting: null, voices: [], err: null, seq: 0, waiters: new Map() };
+
+function kokoroPaths() {
+  const dir = settings.kokoroDir;
+  if (!dir) return null;
+  const model = ["kokoro-v1.0.onnx", "kokoro-v1.0.fp16.onnx", "kokoro-v1.0.int8.onnx"].map((f) => path.join(dir, f)).find((p) => fs.existsSync(p));
+  const voices = path.join(dir, "voices-v1.0.bin");
+  if (!model || !fs.existsSync(voices)) return null;
+  return { model, voices };
+}
+
+function ttsEngine() {
+  if (settings.tts === "windows") return "windows";
+  return kokoroPaths() && kokoro.err !== "unavailable" ? "kokoro" : "windows";
+}
+
+function kokoroStart() {
+  if (kokoro.ready) return Promise.resolve(true);
+  if (kokoro.starting) return kokoro.starting;
+  const p = kokoroPaths();
+  if (!p) return Promise.resolve(false);
+  kokoro.starting = new Promise((resolve) => {
+    const child = spawn("python", [path.join(H.ROOT, "tts-kokoro.py"), p.model, p.voices], { cwd: H.ROOT, windowsHide: true });
+    kokoro.proc = child;
+    const timer = setTimeout(() => { kokoro.err = "Kokoro took too long to start"; resolve(false); }, 30000);
+    child.stdout.on("data", (d) => {
+      kokoro.buf += d.toString();
+      let i;
+      while ((i = kokoro.buf.indexOf("\n")) >= 0) {
+        const line = kokoro.buf.slice(0, i).trim();
+        kokoro.buf = kokoro.buf.slice(i + 1);
+        if (!line) continue;
+        let m;
+        try { m = JSON.parse(line); } catch (e) { continue; }
+        if (m.type === "ready") {
+          kokoro.ready = true; kokoro.err = null; kokoro.voices = m.voices || [];
+          clearTimeout(timer); resolve(true);
+          broadcast({ type: "status", status: status() });
+        } else if (m.type === "error") {
+          // Python or kokoro-onnx missing: stop trying for this session.
+          kokoro.err = /ModuleNotFoundError|No module/.test(m.error) ? "unavailable" : m.error;
+          clearTimeout(timer); resolve(false);
+        } else if (m.type === "tts") {
+          const w = kokoro.waiters.get(m.id);
+          if (w) { kokoro.waiters.delete(m.id); w(m); }
+        }
+      }
+      if (kokoro.buf.length > 8e6) kokoro.buf = "";
+    });
+    child.stderr.on("data", () => {});
+    child.on("error", (e) => { kokoro.err = /ENOENT/.test(e.code || "") ? "unavailable" : e.message; clearTimeout(timer); resolve(false); });
+    child.on("exit", () => {
+      kokoro.proc = null; kokoro.ready = false; kokoro.buf = "";
+      for (const [, w] of kokoro.waiters) w({ error: "kokoro exited" });
+      kokoro.waiters.clear();
+    });
+  }).finally(() => { kokoro.starting = null; });
+  return kokoro.starting;
+}
+
+function kokoroStop() {
+  if (kokoro.proc) { try { kokoro.proc.kill(); } catch (e) {} }
+  kokoro.proc = null; kokoro.ready = false;
+}
+
+async function kokoroSpeak(text) {
+  if (!(await kokoroStart())) return { error: kokoro.err || "kokoro not available" };
+  return new Promise((resolve) => {
+    const id = ++kokoro.seq;
+    const timer = setTimeout(() => { kokoro.waiters.delete(id); resolve({ error: "timed out" }); }, 20000);
+    kokoro.waiters.set(id, (m) => { clearTimeout(timer); resolve(m); });
+    try {
+      kokoro.proc.stdin.write(JSON.stringify({ id, text: String(text).slice(0, 2000), voice: settings.kokoroVoice, speed: settings.rate }) + "\n");
+    } catch (e) { kokoro.waiters.delete(id); clearTimeout(timer); resolve({ error: e.message }); }
+  });
+}
+
+// Kokoro when it is the engine and it works; a Windows voice otherwise.
+async function speak(text) {
+  if (ttsEngine() === "kokoro") {
+    const r = await kokoroSpeak(text);
+    if (r && r.data) return r;
+  }
+  return speakWindows(text);
+}
+
+function speakWindows(text) {
   return new Promise((resolve) => {
     if (!voiceStart()) return resolve({ error: voice.err || "no voice helper" });
     const id = ++voice.seq;
@@ -235,6 +485,15 @@ function status() {
       running: !!voice.proc, ready: voice.ready, error: voice.err,
       offline: voice.offline, onlineBlocked: voice.onlineBlocked,
       listening: voice.listening, voices: voice.voices,
+      stt: sttEngine(),
+    },
+    whisper: (() => {
+      const p = whisperPaths();
+      return { installed: !!p, model: p ? p.name : null, running: whisper.ready, error: whisper.err };
+    })(),
+    tts: {
+      engine: ttsEngine(), installed: !!kokoroPaths(), running: kokoro.ready,
+      voices: kokoro.voices, error: kokoro.err,
     },
     game,
     local: {
@@ -1281,9 +1540,19 @@ async function handle(req, res, urlPath) {
   if (sub === "listen" && req.method === "POST") {
     return H.readJsonBody(req, res, (body) => {
       if (!voiceStart() || !voice.ready) return json(res, 503, { ok: false, error: voice.err || "The voice helper is starting." });
-      const online = body.online != null ? !!body.online : !!settings.onlineSpeech;
-      voiceSend({ cmd: "listen", online, maxSeconds: 20 });
-      return json(res, 200, { ok: true, online });
+      const engine = sttEngine();
+      voiceSend({ cmd: "listen", online: engine === "online", audio: engine === "whisper", maxSeconds: 20 });
+      return json(res, 200, { ok: true, engine });
+    });
+  }
+  // The helper's test hooks (feed it a WAV instead of the mic), for checking
+  // recognition and interruptions without anyone speaking.
+  if (sub === "voice-test" && req.method === "POST") {
+    return H.readJsonBody(req, res, (body) => {
+      if (!/^test-/.test(String(body.cmd || ""))) return json(res, 400, { ok: false, error: "test commands only" });
+      if (!voiceStart() || !voice.ready) return json(res, 503, { ok: false, error: "voice helper not ready" });
+      voiceSend(body);
+      return json(res, 200, { ok: true });
     });
   }
   if (sub === "cancel" && req.method === "POST") {
@@ -1292,7 +1561,9 @@ async function handle(req, res, urlPath) {
   }
   if (sub === "speaking" && req.method === "POST") {
     return H.readJsonBody(req, res, (body) => {
-      voiceSend({ cmd: "speaking", on: !!body.on });
+      // The sentence being said goes along, so his own voice coming back
+      // through the speakers cannot interrupt him.
+      voiceSend({ cmd: "speaking", on: !!body.on, text: String(body.text || "").slice(0, 600) });
       return json(res, 200, { ok: true });
     });
   }
@@ -1410,6 +1681,12 @@ function init(host) {
   // The wake word is resident: start the helper with the server when it is on,
   // rather than waiting for the panel to ask.
   if (settings.wake) setTimeout(voiceStart, 1500);
+  // whisper-server is a child of this process; Windows does not take children
+  // down with their parent, so stop it on the way out.
+  process.on("exit", () => { whisperStop(); kokoroStop(); });
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { whisperStop(); kokoroStop(); process.exit(0); });
+  // Load the voice now, so the first answer is not the one that waits for it.
+  if (ttsEngine() === "kokoro") setTimeout(kokoroStart, 2500);
   // Keep the local model's status fresh for the panel without a request.
   setInterval(() => { localProbe(true).then(() => broadcast({ type: "status", status: status() })); }, 15000).unref();
   // While anything is downloading, the island shows its progress.

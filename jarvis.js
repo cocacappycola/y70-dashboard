@@ -770,15 +770,18 @@
       const gen = this.gen;
       const p = fetch(API + "tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: clean }) })
         .then((r) => (r.ok ? r.blob() : null)).then((b) => (b && gen === this.gen ? URL.createObjectURL(b) : null)).catch(() => null);
-      this.q.push(p);
+      this.q.push({ p, text: clean });
       this.pump();
     },
     async pump() {
       if (this.playing || !this.q.length) return;
       const gen = this.gen;
       this.playing = true;
-      post("speaking", { on: true });
-      const url = await this.q.shift();
+      const item = this.q.shift();
+      // The helper keeps listening while he talks (so "Jarvis..." and "stop"
+      // can cut him off) and is told the sentence, so his own voice cannot.
+      post("speaking", { on: true, text: item.text });
+      const url = await item.p;
       if (gen !== this.gen) return;
       if (!url) { this.playing = false; return this.q.length ? this.pump() : this.ended && this.finished(); }
       setMode("speaking");
@@ -1192,7 +1195,8 @@
         return;
       case "listening":
         if (J.mode !== "listening") setMode("listening");
-        J.status = ev.engine === "offline" && JS && JS.onlineSpeech ? "Offline recognition" : "";
+        // Only worth saying when it is not the recognizer that was asked for.
+        J.status = ev.engine === "offline" && JST && JST.voice && JST.voice.stt === "online" ? "Offline recognition" : "";
         renderJarvis();
         return;
       case "partial":
@@ -1212,6 +1216,20 @@
           setMode("idle");
           scheduleClose(3000);
         }
+        return;
+      // "Stop" / "that's enough" while he talks.
+      case "stop":
+        if (J.mode === "speaking") speech.stop();
+        else if (J.mode === "thinking") { if (J.ctl) J.ctl.abort(); J.ctl = null; setMode("idle"); scheduleClose(1500); }
+        return;
+      // Talking over him (talk-over on): he stops and listens.
+      case "barge":
+        if (J.mode !== "speaking") return;
+        speech.reset();
+        startListening(true);
+        return;
+      case "transcribing":
+        if (J.mode === "listening") { J.status = "Transcribing…"; renderJarvis(); }
         return;
       case "online-unavailable":
         J.note = "Windows has online speech recognition switched off (Settings › Privacy & security › Speech), so this used the offline recognizer.";
@@ -1481,11 +1499,31 @@
     sens.appendChild(r1);
     sens.appendChild(el("span", null, "Hears it more easily"));
     f.appendChild(sens);
-    f.appendChild(toggle("Online speech recognition", "far more accurate (it is what Win+H uses); off = everything stays on this PC",
-      JS.onlineSpeech, (v) => saveSetting({ onlineSpeech: v })));
-    if (JS.onlineSpeech && vo.onlineBlocked) {
-      f.appendChild(status("Windows is refusing online recognition. Turn on Settings › Privacy & security › Speech › Online speech recognition. Until then Jarvis falls back to offline.", "warn"));
+    // Who turns your words into text. The wake word is always Windows', offline.
+    const wh = st.whisper || {};
+    const curStt = JS.stt || (JS.onlineSpeech ? "online" : "offline");
+    f.appendChild(el("div", "set-hint", "Recognising requests"));
+    f.appendChild(chips([
+      ["whisper", "Whisper · local, best"], ["online", "Windows online"], ["offline", "Windows offline"],
+    ], curStt, (v) => saveSetting({ stt: v })));
+    if (curStt === "whisper") {
+      f.appendChild(status(!wh.installed
+        ? "Whisper isn't installed: set the folder holding Release\\whisper-server.exe and a ggml model."
+        : (wh.running ? "Running" : "Starts with the first request") + " · " + wh.model + (JS.whisperGpu ? " on the GPU" : " on the CPU") + (wh.error ? " · " + wh.error : ""),
+        !wh.installed || wh.error ? "warn" : "good"));
+      f.appendChild(toggle("Whisper on the GPU", "about 0.1 s a request and ~600 MB of VRAM; off = CPU, slower, no VRAM", JS.whisperGpu !== false, (v) => saveSetting({ whisperGpu: v })));
+      f.appendChild(textRow(JS.whisperDir, "Folder with whisper.cpp (Release\\whisper-server.exe)", "Save", (v) => saveSetting({ whisperDir: v })));
+    } else if (curStt === "online") {
+      f.appendChild(status("Windows' online recognizer (the one Win+H uses) needs Settings › Privacy & security › Speech › Online speech recognition on.", vo.onlineBlocked ? "warn" : ""));
+    } else {
+      f.appendChild(status("Everything stays on this PC, but it mishears a lot. Whisper is far better and also local."));
     }
+
+    // Cutting him off.
+    f.appendChild(el("div", "set-hint", "Interrupting"));
+    f.appendChild(toggle("Interrupt by voice", "while he talks, “" + JS.wakePhrase + "…” starts a new request and “stop” or “that's enough” ends the answer", JS.stopWords !== false, (v) => saveSetting({ stopWords: v })));
+    f.appendChild(toggle("Interrupt by just talking", "any speech that isn't him stops him and he listens; best with headphones, since his own voice through speakers can trip it", !!JS.bargeIn, (v) => saveSetting({ bargeIn: v })));
+    f.appendChild(status("Tapping the orb always stops him too."));
     if (vo.error) f.appendChild(status("Voice helper: " + vo.error, "bad"));
 
     // ---- Microphone
@@ -1503,8 +1541,30 @@
     // ---- Voice
     f.appendChild(label("Voice"));
     f.appendChild(toggle("Speak replies", null, JS.speak, (v) => saveSetting({ speak: v })));
-    const voices = (vo.voices || []).filter((v) => /^en/i.test(v.lang));
-    if (voices.length) f.appendChild(chips(voices.map((v) => [v.name, v.name.replace(/^Microsoft /, "") + " · " + v.lang]), JS.voice, (v) => saveSetting({ voice: v })));
+    const tts = st.tts || {};
+    const curTts = JS.tts || (tts.installed ? "kokoro" : "windows");
+    f.appendChild(chips([["kokoro", "Kokoro · natural"], ["windows", "Windows voices"]], curTts, (v) => saveSetting({ tts: v })));
+    if (curTts === "kokoro") {
+      if (!tts.installed) {
+        f.appendChild(status("Kokoro isn't installed: set the folder with kokoro-v1.0.onnx and voices-v1.0.bin (and pip install kokoro-onnx).", "warn"));
+      } else if (tts.error) {
+        f.appendChild(status("Kokoro: " + tts.error + " — using a Windows voice meanwhile.", "warn"));
+      }
+      // English voices, British first. a = American, b = British; f/m.
+      const KIND = { bm: "British man", bf: "British woman", am: "American man", af: "American woman" };
+      const kv = (tts.voices || []).filter((v) => /^[ab][fm]_/.test(v))
+        .sort((x, y) => "bm bf am af".indexOf(x.slice(0, 2)) - "bm bf am af".indexOf(y.slice(0, 2)) || x.localeCompare(y));
+      if (kv.length) {
+        f.appendChild(chips(kv.map((v) => [v, v.slice(3).charAt(0).toUpperCase() + v.slice(4) + " · " + KIND[v.slice(0, 2)]]),
+          JS.kokoroVoice, (v) => saveSetting({ kokoroVoice: v })));
+      } else if (tts.installed) {
+        f.appendChild(status(tts.running ? "Loading voices…" : "Kokoro loads with the first answer (about 3 s).", ""));
+      }
+      f.appendChild(textRow(JS.kokoroDir, "Kokoro folder (kokoro-v1.0.onnx, voices-v1.0.bin)", "Save", (v) => saveSetting({ kokoroDir: v })));
+    } else {
+      const voices = (vo.voices || []).filter((v) => /^en/i.test(v.lang));
+      if (voices.length) f.appendChild(chips(voices.map((v) => [v.name, v.name.replace(/^Microsoft /, "") + " · " + v.lang]), JS.voice, (v) => saveSetting({ voice: v })));
+    }
     const rate = el("div", "jf-slider");
     rate.appendChild(el("span", null, "Slower"));
     const r2 = el("input", "ui-range");
@@ -1523,7 +1583,9 @@
       J.reply = saved;
     });
     f.appendChild(el("div", "jf-row")).appendChild(test);
-    f.appendChild(status("More voices: Windows Settings › Time & language › Speech › Add voices (an en-GB voice suits a Jarvis)."));
+    f.appendChild(status(curTts === "kokoro"
+      ? "Kokoro runs on the CPU, so it takes no VRAM from games or the local models. George, Lewis, Daniel and Fable suit a Jarvis."
+      : "More voices: Windows Settings › Time & language › Speech › Add voices (an en-GB voice suits a Jarvis)."));
 
     // ---- Lights (Govee, over the LAN API)
     const li = st.lights || { devices: [] };
