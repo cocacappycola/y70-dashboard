@@ -273,6 +273,12 @@
       const label = J.mode === "listening" ? "Listening…" : J.mode === "thinking" ? (J.status || "Thinking…") : "";
       segs.push({ jarvis: true, label });
     }
+    // A model downloading: its progress, read off the disk by the server.
+    const dl = (J.downloads || []).filter((d) => !d.done && !d.registered && !d.error);
+    if (dl.length) {
+      const d = dl[0];
+      segs.push({ ico: "⬇", label: (d.percent != null ? d.percent + "%" : d.haveGB + " GB") + (dl.length > 1 ? "  +" + (dl.length - 1) : ""), download: true });
+    }
     const running = Timers.all().filter((t) => Timers.left(t) > 0 && !(ring && ring.id === t.id))
       .sort((a, b) => Timers.left(a) - Timers.left(b));
     if (running.length) {
@@ -686,6 +692,31 @@
       box.appendChild(days);
       return box;
     }
+    if (c.kind === "models") {
+      box.appendChild(el("div", "jc-title", "Models · " + c.query));
+      for (const r of (c.items || []).slice(0, 3)) {
+        const wrap = el("div", "jc-model");
+        wrap.appendChild(el("div", "t", r.repo));
+        wrap.appendChild(el("div", "m", (r.downloads ? r.downloads.toLocaleString() + " downloads" : "") + (r.updated ? " · updated " + r.updated : "")));
+        const b = r.best;
+        wrap.appendChild(el("div", "s", "Recommended: " + b.quant + " · " + b.sizeGB + " GB · " + (b.fits ? "fits the GPU" : "bigger than the GPU")));
+        const btns = el("div", "jv-actions");
+        const dl = el("button", "btn btn--primary btn--sm", "Download " + b.quant + " · " + b.sizeGB + " GB");
+        dl.addEventListener("pointerup", () => startDownload(r.repo, b.path, dl));
+        const page = el("button", "btn btn--ghost btn--sm", "Page");
+        page.addEventListener("pointerup", () => openWeb(r.page));
+        btns.append(dl, page);
+        for (const o of (r.others || []).slice(0, 4)) {
+          const ob = el("button", "btn btn--ghost btn--sm" + (o.fits ? "" : " is-danger"), o.quant + " · " + o.sizeGB);
+          ob.title = "Download " + o.path;
+          ob.addEventListener("pointerup", () => startDownload(r.repo, o.path, ob));
+          btns.appendChild(ob);
+        }
+        wrap.appendChild(btns);
+        box.appendChild(wrap);
+      }
+      return box;
+    }
     if (c.kind === "show") {
       box.appendChild(el("div", "jc-title", c.title || ""));
       for (const it of (c.items || []).slice(0, 12)) {
@@ -847,6 +878,7 @@
     web_search: "Searching the web", read_page: "Reading", image_search: "Finding pictures",
     weather: "Checking the weather", volume: "Adjusting the volume", remember: "Remembering",
     discord: "Talking to Discord", notes: "Opening your notes", pc_status: "Checking the PC", phone: "Checking your phone",
+    lights: "Changing the lights", recall: "Remembering", find_model: "Looking for models",
   };
 
   async function runTurn(payload) {
@@ -980,6 +1012,10 @@
         if (!APPS[a.app]) return "There's no app called " + a.app + ".";
         setApp(a.app);
         return "Opened " + APPS[a.app].title + ".";
+      case "open_web":
+        return openWeb(a.url) ? "Opened " + a.url + " on the panel." : "That isn't a web address.";
+      case "download_model":
+        return downloadTool(a);
       default:
         return "Unknown tool " + c.name;
     }
@@ -1008,6 +1044,97 @@
       }
       default: return "Unknown music action.";
     }
+  }
+
+  // ---------------------------------------------------------- web window ---
+  // Pages open in the panel's Web app: a native view, like YouTube's. The
+  // island card closes so the page is not hidden behind it.
+  const GB = 1024 * 1024 * 1024;
+  function webFrame(url) {
+    const existed = !!document.getElementById("app-web");
+    if (!existed) {
+      // A new frame starts on the page itself.
+      const src = APPS.web.src;
+      APPS.web.src = src + "&url=" + encodeURIComponent(url);
+      appFrame("web");
+      APPS.web.src = src;
+    }
+    const f = document.getElementById("app-web");
+    closeCard();
+    setApp("web");
+    if (existed) { try { f.contentWindow.postMessage({ type: "y70:web-open", url }, "*"); } catch (e) {} }
+    return { frame: f, fresh: !existed };
+  }
+  function openWeb(url) {
+    if (!/^https?:\/\//i.test(String(url || ""))) return false;
+    webFrame(url);
+    return true;
+  }
+
+  // Shows a page with a question above it ("Download this?") and resolves with
+  // the answer: true, false, or null when nobody answers in time.
+  let pendingOffer = null;
+  function webOffer(url, info, timeoutMs) {
+    if (pendingOffer) pendingOffer.cancel();
+    return new Promise((resolve) => {
+      const { frame, fresh } = webFrame(url);
+      const id = "o" + Date.now();
+      let done = false;
+      const finish = (v) => {
+        if (done) return;
+        done = true;
+        pendingOffer = null;
+        window.removeEventListener("message", onMsg);
+        clearTimeout(timer);
+        try { frame.contentWindow.postMessage({ type: "y70:web-offer-clear", id }, "*"); } catch (e) {}
+        resolve(v);
+      };
+      const onMsg = (e) => { const d = e.data; if (d && d.type === "y70:web-offer-reply" && d.id === id) finish(!!d.accepted); };
+      window.addEventListener("message", onMsg);
+      const send = () => { try { frame.contentWindow.postMessage({ type: "y70:web-offer", id, ...info }, "*"); } catch (e) {} };
+      if (fresh) frame.addEventListener("load", () => setTimeout(send, 300), { once: true }); else send();
+      const timer = setTimeout(() => finish(null), timeoutMs || 180000);
+      pendingOffer = { cancel: () => finish(false) };
+    });
+  }
+
+  // "Jarvis, download …": shows the model's page with the file, its size and
+  // where it goes, and starts nothing until the Download button is tapped.
+  async function downloadTool(a) {
+    const req = { repo: a.repo, file: a.file, url: a.url };
+    const p = await post("models/plan", req);
+    if (!p.ok) return "Can't download that: " + (p.error || "unknown error") + ".";
+    const gb = (p.total / GB).toFixed(2);
+    const fits = p.total && p.total <= 14.8 * GB;
+    J.status = "Waiting for you to confirm the download";
+    renderIsland();
+    const yes = await webOffer(p.page, {
+      title: "Download " + p.name + "?",
+      detail: (p.total ? gb + " GB" : "Unknown size") + " from " + p.source +
+        (p.files.length > 1 ? ", in " + p.files.length + " parts" : "") + ", into " + p.dir + ". " +
+        (!p.total ? "" : fits ? "It fits the GPU." : "It is bigger than the GPU's 16 GB, so part of it would run on the CPU, slowly."),
+      accept: "Download" + (p.total ? " " + gb + " GB" : ""),
+      decline: "Not now",
+    });
+    J.status = "";
+    if (yes === null) return "Nothing was downloaded: the user did not answer.";
+    if (!yes) return "Nothing was downloaded: the user said not now.";
+    const r = await post("models/download", req);
+    if (!r.ok) return "The download did not start: " + r.error;
+    if (r.already) return p.name + " is already in the models folder.";
+    J.downloads = (J.downloads || []).filter((d) => d.id !== r.id).concat([r]);
+    renderIsland();
+    return "Downloading " + p.name + " (" + gb + " GB) in a window on the main screen. When it finishes it is added to the local model list; the local server needs a restart to load it.";
+  }
+
+  // A Download button on a card is the tap itself, so it starts straight away.
+  async function startDownload(repo, file, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
+    const r = await post("models/download", { repo, file });
+    if (btn) btn.textContent = r.ok ? (r.already ? "Already have it" : "Downloading…") : "Failed";
+    if (!r.ok) { J.note = "Couldn't start the download: " + r.error; renderJarvis(); return; }
+    J.downloads = (J.downloads || []).filter((d) => d.id !== r.id).concat([r]);
+    renderIsland();
   }
 
   // Asks the Spotify app (which holds the sign-in) to search and play.
@@ -1049,6 +1176,7 @@
       case "hello":
       case "status":
         JST = ev.status;
+        if (JST && JST.downloads) { J.downloads = JST.downloads; renderIsland(); }
         renderJarvisSub();
         if (jarvisViewOpen()) renderForm();
         return;
@@ -1096,6 +1224,24 @@
       case "memory":
         if (jarvisViewOpen()) loadFacts();
         return;
+      case "downloads":
+        J.downloads = ev.downloads || [];
+        renderIsland();
+        renderDownloadsBox();
+        return;
+      case "downloaded": {
+        if (ev.status) { JST = ev.status; J.downloads = ev.status.downloads || J.downloads; }
+        const r = ev.result || {};
+        J.note = r.ok
+          ? "A new model is ready: " + r.id + ". Restart the local server (Jarvis settings) to load it."
+          : "A download finished but could not be added: " + (r.error || "unknown error") + ".";
+        chime.done();
+        openCard();
+        renderAll();
+        scheduleClose(15000);
+        if (jarvisViewOpen()) renderForm();
+        return;
+      }
       default: return;
     }
   }
@@ -1148,10 +1294,12 @@
     if (on) { refreshSettings(); loadFacts(); }
     micPolling(on);
   }
-  let facts = [];
+  // The memory as the server reports it: the shared graph (entities with their
+  // observations) or, without one, Jarvis's own list of facts.
+  let memo = { mode: "local", facts: [] };
   async function loadFacts() {
     const r = await fetch(API + "memory").then((x) => x.json()).catch(() => null);
-    facts = (r && r.facts) || [];
+    if (r && r.ok) memo = r;
     if (jarvisViewOpen()) renderForm();
   }
   async function refreshSettings() {
@@ -1264,8 +1412,22 @@
     }
 
     // ---- Local model
+    // Every model in jarvis-models.ini: the 27B, 9B and 4B, and whatever
+    // Jarvis has downloaded since.
     f.appendChild(label("Local model", "llama.cpp, jarvis-llm.bat"));
-    f.appendChild(chips([["jarvis-9b", "Qwen3.5 9B · smarter"], ["jarvis-4b", "Qwen3.5 4B · lighter"]], JS.localModel, (v) => saveSetting({ localModel: v })));
+    const lm = local.models && local.models.length ? local.models
+      : [{ id: "jarvis-27b" }, { id: "jarvis-9b" }, { id: "jarvis-4b" }];
+    const NICE = { "jarvis-27b": "Qwen3.8 27B · smartest", "jarvis-9b": "Qwen3.5 9B · smarter", "jarvis-4b": "Qwen3.5 4B · lighter" };
+    f.appendChild(chips(lm.map((m) => [m.id, (NICE[m.id] || m.id) + (m.loaded ? " · loaded" : "") + (local.up && m.served === false ? " · restart to load" : "")]),
+      JS.localModel, (v) => saveSetting({ localModel: v })));
+    if (local.up && local.needsRestart) {
+      const rr = el("div", "jf-row");
+      rr.appendChild(status("New models were added since the local server started. Restart it to load them.", "warn"));
+      const rb = el("button", "btn btn--primary btn--sm", "Restart local server");
+      rb.addEventListener("pointerup", async () => { rb.disabled = true; const r = await post("local", { action: "restart" }); if (r.status) JST = r.status; setTimeout(refreshSettings, 5000); });
+      rr.appendChild(rb);
+      f.appendChild(rr);
+    }
     f.appendChild(toggle("Use the 4B while gaming", "a game in front swaps to the 4B and frees the 9B's VRAM", JS.autoGameModel, (v) => saveSetting({ autoGameModel: v })));
     if (JS.autoGameModel && st.game) f.appendChild(status(st.game.on ? "Game in front now (" + (st.game.exe || "fullscreen") + ") — using the 4B." : "No game in front.", st.game.on ? "warn" : ""));
     f.appendChild(status(local.up
@@ -1287,6 +1449,26 @@
     }
     f.appendChild(lr);
     f.appendChild(textRow(JS.localBat, "Path to jarvis-llm.bat", "Save", (v) => saveSetting({ localBat: v })));
+
+    // ---- Getting more models
+    f.appendChild(label("Get a model", "Hugging Face, or say “Jarvis, download…”"));
+    f.appendChild(textRow("", "Search, e.g. qwen 3.5 27b, or paste a link", "Find", async (v, inp) => {
+      if (!v) return;
+      const box = document.getElementById("jf-found");
+      box.textContent = "Searching…";
+      const r = await post("models/find", { query: v });
+      box.innerHTML = "";
+      if (!r.ok) { box.appendChild(status(r.error || "nothing found", "bad")); return; }
+      box.appendChild(cardNode({ kind: "models", query: r.query, items: r.results }));
+      inp.blur();
+    }));
+    const found = el("div", "jf-found");
+    found.id = "jf-found";
+    f.appendChild(found);
+    const dlb = el("div", "jf-downloads");
+    dlb.id = "jf-downloads";
+    f.appendChild(dlb);
+    renderDownloadsBox();
 
     // ---- Listening
     f.appendChild(label("Listening"));
@@ -1343,6 +1525,59 @@
     f.appendChild(el("div", "jf-row")).appendChild(test);
     f.appendChild(status("More voices: Windows Settings › Time & language › Speech › Add voices (an en-GB voice suits a Jarvis)."));
 
+    // ---- Lights (Govee, over the LAN API)
+    const li = st.lights || { devices: [] };
+    f.appendChild(label("Lights", "Govee · say “Jarvis, lights purple”"));
+    if (!li.devices.length) {
+      f.appendChild(status(li.desktop ? "Govee Desktop lists no lights." : "No Govee lights found. Govee Desktop's device list is where Jarvis learns their names.", "warn"));
+    }
+    for (const d of li.devices) {
+      const row = el("div", "jf-mic");
+      row.appendChild(el("span", "nm", d.name + " · " + d.sku));
+      row.appendChild(el("span", "badge", d.ip ? "on the network · " + d.ip : "not on the network"));
+      for (const [act, txt] of [["on", "On"], ["off", "Off"]]) {
+        const b = el("button", "btn btn--ghost btn--sm", txt);
+        b.addEventListener("pointerup", async () => {
+          b.disabled = true;
+          const r = await post("lights", { action: act, device: d.name });
+          b.disabled = false;
+          const first = (r.results || [])[0];
+          const s = status(first ? (first.ok ? txt + " ✓ (" + first.via + ")" : first.error) : (r.error || "?"), first && first.ok ? "good" : "bad");
+          row.after(s);
+          setTimeout(() => s.remove(), 5000);
+          if (r.lights && JST) { JST.lights = r.lights; }
+        });
+        row.appendChild(b);
+      }
+      f.appendChild(row);
+    }
+    const lr2 = el("div", "jf-row");
+    const scanB = el("button", "btn btn--ghost btn--sm", "Look for lights");
+    scanB.addEventListener("pointerup", async () => {
+      scanB.disabled = true; scanB.textContent = "Looking…";
+      const r = await post("lights", { action: "scan" });
+      if (r.lights && JST) JST.lights = r.lights;
+      renderForm();
+    });
+    lr2.appendChild(scanB);
+    f.appendChild(lr2);
+    f.appendChild(status("Control goes straight to the lights over your network (LAN Control must be on for them in the Govee Home app). Govee Desktop keeps working alongside."));
+    if (li.hasKey) {
+      const kr = el("div", "jf-row");
+      kr.appendChild(status("Govee API key saved: scenes and control away from the LAN work.", "good"));
+      const rm = el("button", "btn btn--ghost btn--sm", "Remove key");
+      rm.addEventListener("pointerup", async () => { const r = await post("lights/key", { clear: true }); if (r.lights && JST) JST.lights = r.lights; renderForm(); });
+      kr.appendChild(rm);
+      f.appendChild(kr);
+    } else {
+      f.appendChild(textRow("", "Optional: Govee API key, for scenes", "Save key", async (v, inp) => {
+        const r = await post("lights/key", { key: v });
+        if (r.ok) { inp.value = ""; inp.blur(); if (JST) JST.lights = r.lights; renderForm(); }
+        else { const s = status(r.error, "bad"); inp.parentNode.after(s); setTimeout(() => s.remove(), 5000); }
+      }, "password"));
+      f.appendChild(status("Get one free in the Govee Home app: Profile › Settings › Apply for API Key. Without it everything but scenes still works."));
+    }
+
     // ---- About you
     f.appendChild(label("About you", "goes in every request"));
     f.appendChild(textRow(JS.name, "Your name", "Save", (v) => saveSetting({ name: v })));
@@ -1363,21 +1598,66 @@
     }));
 
     // ---- Memory
-    f.appendChild(label("Memory", facts.length ? facts.length + " remembered" : "say “remember that…”"));
-    const list = el("div", "jf-facts");
-    for (const fct of facts) {
-      const row = el("div", "jf-fact");
-      row.appendChild(el("span", null, fct.text));
-      const x = el("button", "btn btn--quiet btn--sm btn--icon", "✕");
-      x.addEventListener("pointerup", async () => { await post("memory", { forget: fct.id }); loadFacts(); });
-      row.appendChild(x);
-      list.appendChild(row);
+    // One memory, shared with the web UI through the MCP memory server.
+    if (memo.mode === "graph") {
+      const n = (memo.entities || []).reduce((s, e) => s + e.observations.length, 0);
+      f.appendChild(label("Memory", "shared · " + n + " facts about " + (memo.entities || []).length + " things"));
+      f.appendChild(status(memo.server
+        ? "Shared with your other assistant through the memory server (memory-server.bat)."
+        : "The memory server isn't running, so Jarvis writes memory.json directly; the web UI sees it next time it reads.", memo.server ? "good" : "warn"));
+      f.appendChild(textRow("", "Tell Jarvis something to remember", "Remember", async (v, inp) => {
+        if (!v) return;
+        await post("memory", { fact: v });
+        inp.value = ""; inp.blur();
+        loadFacts();
+      }));
+      const list = el("div", "jf-facts");
+      const me = (memo.user || "").toLowerCase();
+      const ents = (memo.entities || []).slice().sort((a, b) => (b.name.toLowerCase() === me) - (a.name.toLowerCase() === me));
+      for (const e of ents) {
+        list.appendChild(el("div", "jf-entity", e.name + (e.entityType ? " · " + e.entityType : "")));
+        for (const o of e.observations) {
+          const row = el("div", "jf-fact");
+          row.appendChild(el("span", null, o));
+          const x = el("button", "btn btn--quiet btn--sm btn--icon", "✕");
+          x.addEventListener("pointerup", async () => { x.disabled = true; await post("memory", { forget: o, entity: e.name }); loadFacts(); });
+          row.appendChild(x);
+          list.appendChild(row);
+        }
+      }
+      f.appendChild(list);
+    } else {
+      const facts = memo.facts || [];
+      f.appendChild(label("Memory", facts.length ? facts.length + " remembered" : "say “remember that…”"));
+      const list = el("div", "jf-facts");
+      for (const fct of facts) {
+        const row = el("div", "jf-fact");
+        row.appendChild(el("span", null, fct.text));
+        const x = el("button", "btn btn--quiet btn--sm btn--icon", "✕");
+        x.addEventListener("pointerup", async () => { await post("memory", { forget: fct.id }); loadFacts(); });
+        row.appendChild(x);
+        list.appendChild(row);
+      }
+      f.appendChild(list);
     }
-    f.appendChild(list);
-    f.appendChild(toggle("Also read a memory graph", "the MCP memory server's file, shared with your other assistant", JS.useGraph, (v) => saveSetting({ useGraph: v })));
+    f.appendChild(toggle("Share memory with the web UI", "uses the MCP memory server's memory.json", JS.useGraph, (v) => saveSetting({ useGraph: v })));
     if (JS.useGraph) f.appendChild(textRow(JS.graphFile, "Path to memory.json", "Save", (v) => saveSetting({ graphFile: v })));
 
     f.scrollTop = scroll;
+  }
+
+  // Model downloads in progress, updated in place from the "downloads" event.
+  function renderDownloadsBox() {
+    const box = document.getElementById("jf-downloads");
+    if (!box) return;
+    box.innerHTML = "";
+    for (const d of J.downloads || []) {
+      const row = el("div", "jf-fact");
+      const pct = d.percent != null ? d.percent + "%" : d.haveGB + " GB";
+      const what = d.error ? "failed: " + d.error : d.registered ? "installed" : d.done ? "checking…" : pct + " of " + d.totalGB + " GB";
+      row.appendChild(el("span", null, "⬇ " + d.name + " · " + what));
+      box.appendChild(row);
+    }
   }
 
   // Input list with live meters. Rows are rebuilt only when the devices or the

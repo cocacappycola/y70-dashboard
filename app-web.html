@@ -40,6 +40,18 @@
       padding: 30px; gap: 10px; color: var(--v-sub, #a6a6b3); font-size: 13px; line-height: 1.6;
     }
     #msg b { color: var(--v-text, #fff); font-size: 15px; }
+
+    /* A question from Jarvis about this page ("Download this model?"). It sits
+       above the slot, so the native view moves down and both stay visible. */
+    #offer {
+      flex-shrink: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      padding: 10px 12px; background: #000; color: #f4f2f7;
+      border-bottom: 1px solid var(--v-accent-line, rgba(255,59,92,.4));
+    }
+    #offer[hidden] { display: none; }
+    #offer .o-text { flex: 1 1 100%; font-size: 13px; line-height: 1.4; }
+    #offer .o-text b { display: block; font-size: 14px; margin-bottom: 2px; word-break: break-all; }
+    #offer .btn { flex: 1; min-height: var(--h-md); }
   </style>
 </head>
 <body>
@@ -57,6 +69,11 @@
       <button class="btn btn--sm btn--icon tb" id="zoom-in" title="Show more">+</button>
       <button class="btn btn--sm btn--icon tb" id="auto" title="Auto scroll">▼</button>
       <input class="ui-range" id="speed" type="range" min="1" max="10" value="5" title="Auto-scroll speed" />
+    </div>
+    <div id="offer" hidden>
+      <div class="o-text"><b id="offer-title"></b><span id="offer-detail"></span></div>
+      <button class="btn btn--primary" id="offer-yes">Download</button>
+      <button class="btn btn--ghost" id="offer-no">Not now</button>
     </div>
     <div id="slot">
       <div id="msg">
@@ -81,10 +98,25 @@
       // It also serves the "download the app" page to anything narrower than
       // 768 CSS pixels, and the panel is 682, so it starts zoomed out.
       snapchat: { name: "Snapchat", home: "https://www.snapchat.com/web/", mode: "page", mobile: false, zoom: 0.8 },
+      // Whatever page Jarvis opens (Jarvis fork). Starts on Hugging Face, where
+      // most of what he is asked to fetch lives.
+      web: { name: "Web", home: "https://huggingface.co/models?library=gguf&sort=trending", mode: "page", mobile: true },
     };
 
     const key = new URLSearchParams(location.search).get("site") || "youtube";
     const site = SITES[key] || SITES.youtube;
+    // The page the view opens on: ?url= for the first time, a y70:web-open
+    // message once it exists.
+    let startUrl = new URLSearchParams(location.search).get("url") || site.home;
+    let pendingLoad = null;
+    let offerId = null;
+    function answerOffer(yes) {
+      if (!offerId) return;
+      try { window.parent.postMessage({ type: "y70:web-offer-reply", id: offerId, accepted: yes }, "*"); } catch (e) {}
+      offerId = null;
+      $("offer").hidden = true;
+      place(true);
+    }
     document.title = site.name;
     $("site-name").textContent = site.name;
 
@@ -125,6 +157,26 @@
         $("keys").classList.toggle("is-on", !!d.on);
         return;
       }
+      // Jarvis sending this view somewhere. Before the native view exists the
+      // address just becomes the one it is created with.
+      // Jarvis asking about this page. The answer goes back the same way.
+      if (d && d.type === "y70:web-offer") {
+        offerId = d.id;
+        $("offer-title").textContent = d.title || "";
+        $("offer-detail").textContent = d.detail || "";
+        $("offer-yes").textContent = d.accept || "Yes";
+        $("offer-no").textContent = d.decline || "Not now";
+        $("offer").hidden = false;
+        place(true);
+        return;
+      }
+      if (d && d.type === "y70:web-offer-clear") { if (!d.id || d.id === offerId) { $("offer").hidden = true; offerId = null; place(true); } return; }
+      if (d && d.type === "y70:web-open" && /^https?:\/\//.test(d.url || "")) {
+        startUrl = d.url;
+        if (native) ask("load", { arg: d.url }).then(syncNav);
+        else pendingLoad = d.url;     // the view is still being made: load it once it is
+        return;
+      }
       if (!d || d.type !== "y70:web-reply") return;
       const fn = waiting.get(d.id);
       if (fn) { waiting.delete(d.id); fn(d.result); }
@@ -140,7 +192,7 @@
       lastRect = sig;
       ask("place", {
         rect,
-        url: site.home,
+        url: startUrl,
         mobile,
         zoom,
         visible: !document.hidden,
@@ -148,6 +200,7 @@
         if (res && res.ok) {
           native = true;
           $("msg").style.display = "none";
+          if (pendingLoad) { const u = pendingLoad; pendingLoad = null; ask("load", { arg: u }).then(syncNav); }
         }
       });
     }
@@ -204,6 +257,8 @@
     $("fwd").addEventListener("pointerup", () => ask("forward", {}).then(syncNav));
     $("home").addEventListener("pointerup", () => ask("load", { arg: site.home }).then(syncNav));
     $("reload").addEventListener("pointerup", () => ask("reload", {}));
+    $("offer-yes").addEventListener("pointerup", () => answerOffer(true));
+    $("offer-no").addEventListener("pointerup", () => answerOffer(false));
     $("auto").addEventListener("pointerup", () => setAuto(!auto));
     function setZoom(z) {
       zoom = Math.max(0.5, Math.min(1.2, Math.round(z * 20) / 20));

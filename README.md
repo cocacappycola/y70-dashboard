@@ -22,7 +22,9 @@ answers out loud, puts anything worth seeing on the panel, and can do things:
 | "Who won the F1 race?" / "summarise that article" | Web search (and page reading), answered from sources |
 | "Show me a western fence lizard" | Pictures on the panel; tap one to see it big |
 | "Turn it down a bit" / "mute Discord" | System volume / Discord voice |
-| "Remember that…" / "add milk to my notes" | Memory / the Notes widget |
+| "Remember that…" / "add milk to my notes" | Shared memory / the Notes widget |
+| "Lights purple" / "lights off" / "dim the lights to 30" | Your Govee strip, over the LAN |
+| "Download Qwen 3.5 27B" / "find me a coding model" | Finds GGUF builds on Hugging Face, opens the page, downloads after you tap |
 
 "Jarvis, set a timer for five minutes" works in one breath: the name and the
 request are heard together. If his answer ends in a question, he listens again
@@ -37,15 +39,30 @@ box to type into instead.
    folder and is never shown or served back. **Auto** uses the local model when
    it is running and Claude when it is not.
 2. **Local model.** `E:\OLLAMAMODEL2026\gguf\jarvis-llm.bat` runs llama-server in
-   router mode on port 8081 with **Qwen3.5 9B** and **Qwen3.5 4B** (unsloth
-   UD-Q4_K_XL), one loaded at a time, unloaded after 10 idle minutes so games get
-   the VRAM back. Start / Stop / Edit it from Jarvis's settings. Per-model
-   settings are in `jarvis-models.ini` beside it. With *Use the 4B while gaming*
-   on, a game in front (any other program filling its monitor) switches to the
-   4B and unloads the 9B immediately. Your 27B chat model fills the card by
-   itself, so with both running set `NGL=0` in the bat (CPU — slow: the first
-   tool-using answer takes about a minute).
-3. **Hearing.** The wake word is recognised offline by Windows' own engine and
+   router mode on port 8081 with all three: **Qwen3.8 27B** (your chat model,
+   with exactly the settings from `qwen27b-iq4.bat`), **Qwen3.5 9B** and
+   **Qwen3.5 4B**. One is loaded at a time, unloaded after 10 idle minutes so
+   games get the VRAM back. It also starts the MCP memory server and serves the
+   web UI (with the MCP proxy) at http://127.0.0.1:8081, so it replaces
+   `qwen27b-iq4.bat` — run one or the other, never both (the 27B would be in
+   VRAM twice). Start / Stop / Restart / Edit it from Jarvis's settings.
+   Per-model settings, **including GPU layers**, live in `jarvis-models.ini`:
+   a `-ngl` on the bat's command line overrides every model's own value
+   (measured — it turned the 27B's 56 into 99). With *Use the 4B while gaming*
+   on, a game in front switches to the 4B and unloads whatever else is loaded.
+   Big models (14B and up) get every tool and the whole memory; small ones a
+   short list.
+3. **More models.** "Jarvis, download …" (or Settings → Jarvis → *Get a model*)
+   searches Hugging Face for GGUF builds and picks the quant that fits the 16 GB
+   card. Jarvis opens the model's page in the panel's **Web** app with a
+   *Download?* bar above it — nothing downloads until you tap. The download runs
+   in its own cmd window (curl, resumable — run the script again to continue),
+   is checked (size, GGUF header) and added to `jarvis-models.ini` with GPU
+   layers left to llama.cpp's `--fit`. Restart the local server to load it.
+   Only `.gguf` files, only https; a direct link from any site works too.
+   Gated repos (Llama, Gemma's originals) need a Hugging Face login it doesn't
+   have.
+4. **Hearing.** The wake word is recognised offline by Windows' own engine and
    nothing leaves the PC until you ask something. The request itself is heard by
    Windows' **online** recognizer when *Online speech recognition* is on in
    Jarvis's settings — the one Win+H uses, far more accurate — which also needs
@@ -53,13 +70,28 @@ box to type into instead.
    With either off, the offline recognizer does the job (it mishears much more).
    Jarvis listens on Windows' **default recording device** — currently a
    Voicemeeter bus on this PC, so route your mic to it or change the default.
-4. **Voice.** Any installed Windows voice; an en-GB one (Settings › Time &
+5. **Voice.** Any installed Windows voice; an en-GB one (Settings › Time &
    language › Speech › Add voices) suits a Jarvis.
-5. **About you / memory.** Name, what to call you, free text, home for the
-   weather. Facts you ask him to remember are listed and can be deleted. He can
-   also read the MCP memory server's graph (`E:\OLLAMAMODEL2026\memory.json`) so
-   he knows what your other assistant knows. All of it goes into each request
-   to whichever brain answers.
+6. **About you / memory.** Name, what to call you, free text, home for the
+   weather. Memory is **one memory shared with the web UI**: the MCP memory
+   server's knowledge graph (`E:\OLLAMAMODEL2026\memory.json`). Jarvis writes
+   through that server when it is running (it is the one writer, as for the web
+   UI) and edits the file in the same format when it is not — the server
+   re-reads the file on every request, so nothing is lost. Reads go straight to
+   the file; the server takes ~1.4 s a call. "Remember Jake plays bass" files it
+   under Jake; the settings list every entity and fact, each deletable. All of it
+   goes into each request to whichever brain answers.
+7. **Lights.** Govee Desktop has **no API** another program can use — it listens
+   on no port and opens no pipe (checked, v2.40.60). The workaround is Govee's
+   own **LAN API**, the one Govee Desktop and Home Assistant use: UDP to the
+   light, no account, no key, Govee Desktop keeps working alongside. Names come
+   from Govee Desktop's device list. Govee Desktop holds UDP 4002 (where lights
+   answer) exclusively, so Jarvis binds the LAN address's 4002 instead, which
+   Windows allows, and falls back to the light's MAC in the ARP table. Because
+   UDP has no receipt, a light not heard from for 5 minutes must answer a ping
+   before Jarvis says it did anything. *LAN Control* must be on for the light
+   in the Govee Home app. A Govee API key (Govee Home → Profile → Settings →
+   Apply for API Key) adds scenes and control away from the LAN.
 
 ### How it works
 
@@ -859,6 +891,8 @@ wscript "autostart-hidden.vbs" 0
 | `assistant.js` | Jarvis: settings, the voice helper, both brains, tools, conversations |
 | `assistant-web.js` | Jarvis's key-less search, images, page reading, weather |
 | `search-ddgs.py` | Search through the `ddgs` Python library when it is installed |
+| `assistant-models.js` | Local models: Hugging Face search, confirmed downloads, adding to the preset |
+| `govee.js` | Govee lights over the LAN API (and the cloud API, with a key) |
 | `jarvis.js` / `jarvis.css` | Status bar, the island, alarms + timers, Jarvis's card and settings |
 | `voice/Program.cs` | Voice helper — wake word, online/offline dictation, voices, game probe |
 | `index.html` | UI layout |

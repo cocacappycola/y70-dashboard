@@ -177,6 +177,12 @@ body.island-on #island {
 .jc-wx-days .more { font-size: 11px; color: var(--isl-sub); margin-top: 2px; text-transform: capitalize; }
 .jv-again .jv-orb { width: 16px; height: 16px; }
 
+.jc-model { padding: 8px 0; }
+.jc-model + .jc-model { border-top: 1px solid var(--isl-line); }
+.jc-model .t { font-size: 14px; font-weight: 650; word-break: break-all; }
+.jc-model .s { font-size: 12px; color: var(--isl-sub); margin-top: 3px; }
+.jc-model .m { font-size: 10.5px; color: var(--jv-b); margin-top: 2px; }
+
 /* Timers and alarms in the card */
 .tm-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
 .tm-row + .tm-row { border-top: 1px solid var(--isl-line); }
@@ -222,6 +228,11 @@ body.jv-listening #jv-glow { padding: 7px; animation-duration: 1.6s; }
 .jf-slider { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--sub); }
 .jf-slider .ui-range { flex: 1; }
 #jarvis-form input, #jarvis-form textarea { user-select: text; }
+
+.jf-entity { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--trim); margin: 10px 0 2px; }
+.jf-found { margin-top: 8px; }
+.jf-found:empty, .jf-downloads:empty { display: none; }
+.jf-downloads { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 
 .jf-mics { display: flex; flex-direction: column; gap: 6px; }
 .jf-mic {

@@ -26,6 +26,8 @@ const fs = require("fs");
 const path = require("path");
 const { spawn, execFile } = require("child_process");
 const web = require("./assistant-web");
+const models = require("./assistant-models");
+const govee = require("./govee");
 const discord = require("./discord");
 
 let Anthropic = null;
@@ -40,7 +42,7 @@ const DEFAULTS = {
   provider: "auto",                 // claude | local | auto (local when it is up)
   claudeModel: "claude-haiku-4-5",
   localUrl: "http://127.0.0.1:8081",
-  localModel: "jarvis-9b",          // jarvis-9b | jarvis-4b
+  localModel: "jarvis-9b",          // any [section] of jarvis-models.ini
   autoGameModel: true,              // use the 4B while a game is in front
   localBat: "",                     // jarvis-llm.bat, so the panel can start it
   wake: true,
@@ -54,11 +56,11 @@ const DEFAULTS = {
   addressAs: "",
   about: "",
   home: null,                       // { name, lat, lon }
-  graphFile: "",                    // an MCP memory knowledge graph (JSONL)
+  graphFile: "",                    // the MCP memory server's knowledge graph (JSONL)
   useGraph: true,
+  memoryUrl: "http://127.0.0.1:8001/mcp",   // that server (memory-server.bat)
 };
 const CLAUDE_MODELS = ["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"];
-const LOCAL_MODELS = ["jarvis-9b", "jarvis-4b"];
 
 function settingsFile() { return H.stateFile("jarvis.json"); }
 
@@ -75,11 +77,11 @@ function saveSettings(patch) {
   }
   if (!["claude", "local", "auto"].includes(next.provider)) next.provider = DEFAULTS.provider;
   if (!CLAUDE_MODELS.includes(next.claudeModel)) next.claudeModel = DEFAULTS.claudeModel;
-  if (!LOCAL_MODELS.includes(next.localModel)) next.localModel = DEFAULTS.localModel;
+  if (!/^[\w.\-]{1,64}$/.test(String(next.localModel || ""))) next.localModel = DEFAULTS.localModel;
   next.sensitivity = Math.max(0, Math.min(1, Number(next.sensitivity) || 0.5));
   next.rate = Math.max(0.6, Math.min(2, Number(next.rate) || 1));
   next.wakePhrase = String(next.wakePhrase || "jarvis").trim().toLowerCase().slice(0, 30) || "jarvis";
-  for (const k of ["name", "addressAs", "voice", "localBat", "graphFile", "localUrl"]) next[k] = String(next[k] || "").slice(0, 400);
+  for (const k of ["name", "addressAs", "voice", "localBat", "graphFile", "localUrl", "memoryUrl"]) next[k] = String(next[k] || "").slice(0, 400);
   next.about = String(next.about || "").slice(0, 4000);
   settings = next;
   try { fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2)); } catch (e) { return e.message; }
@@ -235,12 +237,20 @@ function status() {
       listening: voice.listening, voices: voice.voices,
     },
     game,
-    local: { up: local.up, checkedAt: local.checkedAt, model: localModelNow(), loaded: local.loaded },
+    local: {
+      up: local.up, checkedAt: local.checkedAt, model: localModelNow(), loaded: local.loaded,
+      models: localModels(), needsRestart: local.needsRestart,
+    },
+    memory: { mode: graphMode() ? "graph" : "local", server: memoryServer.up },
+    downloads: models.list(),
+    lights: govee.status(),
   };
 }
 
 // -------------------------------------------------------------- local model --
-const local = { up: false, checkedAt: 0, loaded: null };
+//  jarvis-llm.bat runs llama-server in router mode with every model in
+//  jarvis-models.ini (the 27B, the 9B, the 4B, and whatever Jarvis downloads).
+const local = { up: false, checkedAt: 0, loaded: null, served: [], needsRestart: false };
 
 async function localProbe(force) {
   if (!force && Date.now() - local.checkedAt < 8000) return local.up;
@@ -252,13 +262,35 @@ async function localProbe(force) {
     clearTimeout(t);
     const j = await r.json();
     local.up = r.ok;
+    local.served = (j.data || []).map((m) => m.id);
     const loaded = (j.data || []).find((m) => m.status && m.status.value === "loaded");
     local.loaded = loaded ? loaded.id : null;
+    // A model added to the preset since the router started is not served
+    // until it restarts.
+    if (local.up) local.needsRestart = models.readIni(settings).some((m) => !local.served.includes(m.id));
   } catch (e) {
     local.up = false;
     local.loaded = null;
+    local.served = [];
   }
   return local.up;
+}
+
+// Everything the preset lists, marked with what the router actually serves.
+function localModels() {
+  const ini = models.readIni(settings);
+  const ids = ini.length ? ini.map((m) => m.id) : local.served;
+  return ids.map((id) => {
+    const m = ini.find((x) => x.id === id);
+    return { id, file: m && m.file ? path.basename(m.file) : null, loaded: local.loaded === id, served: local.served.includes(id), big: isBig(id, m && m.file) };
+  });
+}
+
+// A 14B-and-up model gets every tool and the whole memory graph; small ones a
+// short list, which they choose from far more reliably.
+function isBig(id, file) {
+  const m = (String(id) + " " + String(file || "")).match(/(\d+(?:\.\d+)?)\s*b\b/i);
+  return !!m && Number(m[1]) >= 14;
 }
 
 function localModelNow() {
@@ -328,10 +360,89 @@ function localEdit() {
   return { ok: true, opened: files };
 }
 
+// The router only reads its preset at start, so a newly added model needs this.
+async function localRestart() {
+  const stop = await localStop();
+  if (!stop.ok) return stop;
+  await new Promise((r) => setTimeout(r, 1500));
+  const r = localStart();
+  local.needsRestart = false;
+  return r;
+}
+
 // ------------------------------------------------------------------ memory --
-// Jarvis's own facts live in jarvis-memory.json. A knowledge graph from the MCP
-// memory server (the one your llama web UI writes) can be read as well, so
-// both assistants know the same things about you.
+//  One memory for every assistant on this PC: the knowledge graph the MCP
+//  memory server keeps in memory.json. memory-server.bat runs it, and both
+//  qwen27b-iq4.bat and jarvis-llm.bat start that, so the web UI and Jarvis
+//  read and write the same entities.
+//
+//  Writes go through the server when it is up, so it stays the one writer.
+//  When it is down, Jarvis edits the file in the same JSONL format; the
+//  server re-reads the file on every request, so nothing is lost either way.
+//  Reads go straight to the file: the server runs without sessions and takes
+//  about 1.4 s a call (measured), too slow to pay on every question.
+//
+//  With no graph file set, Jarvis keeps his own jarvis-memory.json instead.
+function graphMode() { return !!(settings.useGraph && settings.graphFile); }
+function userEntity() { return settings.name || "User"; }
+
+function readGraph() {
+  const g = { entities: [], relations: [] };
+  let text = "";
+  try { text = fs.readFileSync(settings.graphFile, "utf8"); } catch (e) { return g; }
+  for (const l of text.split(/\r?\n/)) {
+    if (!l.trim()) continue;
+    let o;
+    try { o = JSON.parse(l); } catch (e) { continue; }
+    if (o.type === "entity") g.entities.push({ name: o.name, entityType: o.entityType, observations: o.observations || [] });
+    else if (o.type === "relation") g.relations.push({ from: o.from, to: o.to, relationType: o.relationType });
+  }
+  return g;
+}
+
+// The server's own format: one JSON object per line, entities then relations.
+function writeGraph(g) {
+  const lines = g.entities.map((e) => JSON.stringify({ type: "entity", name: e.name, entityType: e.entityType, observations: e.observations }))
+    .concat(g.relations.map((r) => JSON.stringify({ type: "relation", from: r.from, to: r.to, relationType: r.relationType })));
+  const tmp = settings.graphFile + ".jarvis-tmp";
+  fs.writeFileSync(tmp, lines.join("\n"), "utf8");
+  fs.renameSync(tmp, settings.graphFile);
+}
+
+// The MCP memory server, spoken to without a session (it is run stateless,
+// so a single tools/call works on its own — verified).
+const memoryServer = { up: false, checkedAt: 0 };
+async function mcpTool(name, args) {
+  if (!settings.memoryUrl) return null;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const r = await fetch(settings.memoryUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name, arguments: args } }),
+      signal: ctl.signal,
+    });
+    const text = await r.text();
+    let msg = null;
+    for (const line of text.split(/\r?\n/)) {
+      if (line.startsWith("data:")) { try { msg = JSON.parse(line.slice(5)); } catch (e) {} }
+    }
+    if (!msg && text.trim().startsWith("{")) { try { msg = JSON.parse(text); } catch (e) {} }
+    memoryServer.up = true;
+    memoryServer.checkedAt = Date.now();
+    if (!msg) return null;
+    const out = msg.result && msg.result.content && msg.result.content.map((c) => c.text || "").join("\n");
+    if (msg.error || (msg.result && msg.result.isError)) return { ok: false, error: out || (msg.error && msg.error.message) || "error" };
+    return { ok: true, text: out };
+  } catch (e) {
+    memoryServer.up = false;
+    memoryServer.checkedAt = Date.now();
+    return null;
+  } finally { clearTimeout(t); }
+}
+
+// ---- Jarvis's own facts, when there is no graph ----
 function memoryFile() { return H.stateFile("jarvis-memory.json"); }
 function loadFacts() {
   try { const j = JSON.parse(fs.readFileSync(memoryFile(), "utf8")); return Array.isArray(j.facts) ? j.facts : []; }
@@ -340,42 +451,127 @@ function loadFacts() {
 function saveFacts(facts) {
   fs.writeFileSync(memoryFile(), JSON.stringify({ facts }, null, 2));
 }
-function remember(text) {
+
+async function remember(text, about, type) {
   const t = String(text || "").trim().slice(0, 500);
   if (!t) return { ok: false, error: "nothing to remember" };
-  const facts = loadFacts();
-  if (facts.some((f) => f.text.toLowerCase() === t.toLowerCase())) return { ok: true, already: true };
-  facts.push({ id: "m" + Date.now().toString(36), text: t, at: new Date().toISOString().slice(0, 10) });
-  saveFacts(facts);
-  return { ok: true, saved: t, count: facts.length };
+  if (!graphMode()) {
+    const facts = loadFacts();
+    if (facts.some((f) => f.text.toLowerCase() === t.toLowerCase())) return { ok: true, already: true };
+    facts.push({ id: "m" + Date.now().toString(36), text: t, at: new Date().toISOString().slice(0, 10) });
+    saveFacts(facts);
+    return { ok: true, saved: t, count: facts.length };
+  }
+  const want = String(about || "").trim() || userEntity();
+  const g = readGraph();
+  const e = g.entities.find((x) => x.name.toLowerCase() === want.toLowerCase());
+  if (e && e.observations.some((o) => o.toLowerCase() === t.toLowerCase())) return { ok: true, already: true, about: e.name };
+  const name = e ? e.name : want;
+  const kind = String(type || "").trim() || (name === userEntity() ? "Person" : "Note");
+  const r = e
+    ? await mcpTool("add_observations", { observations: [{ entityName: name, contents: [t] }] })
+    : await mcpTool("create_entities", { entities: [{ name, entityType: kind, observations: [t] }] });
+  if (r && r.ok) { graphCache.mtime = 0; return { ok: true, saved: t, about: name, via: "memory server" }; }
+  // The server is not running: write the file the same way it would.
+  const g2 = readGraph();
+  let e2 = g2.entities.find((x) => x.name.toLowerCase() === name.toLowerCase());
+  if (!e2) { e2 = { name, entityType: kind, observations: [] }; g2.entities.push(e2); }
+  e2.observations.push(t);
+  writeGraph(g2);
+  graphCache.mtime = 0;
+  return { ok: true, saved: t, about: name, via: "memory file" };
 }
-function forget(text) {
-  const t = String(text || "").trim().toLowerCase();
-  const facts = loadFacts();
-  const keep = facts.filter((f) => !(t && (f.text.toLowerCase().includes(t) || f.id === text)));
-  saveFacts(keep);
-  return { ok: true, removed: facts.length - keep.length };
+
+// Removes observations containing the text, or exactly one when the panel
+// names both the entity and the observation.
+async function forget(text, entity) {
+  const t = String(text || "").trim();
+  if (!graphMode()) {
+    const facts = loadFacts();
+    const keep = facts.filter((f) => !(t && (f.text.toLowerCase().includes(t.toLowerCase()) || f.id === t)));
+    saveFacts(keep);
+    return { ok: true, removed: facts.length - keep.length };
+  }
+  if (!t) return { ok: false, error: "what should I forget?" };
+  const g = readGraph();
+  const deletions = [];
+  for (const e of g.entities) {
+    if (entity && e.name !== entity) continue;
+    const hit = e.observations.filter((o) => (entity ? o === t : o.toLowerCase().includes(t.toLowerCase())));
+    if (hit.length) deletions.push({ entityName: e.name, observations: hit });
+  }
+  const count = deletions.reduce((s, d) => s + d.observations.length, 0);
+  if (!count) return { ok: true, removed: 0 };
+  const r = await mcpTool("delete_observations", { deletions });
+  if (!(r && r.ok)) {
+    for (const d of deletions) {
+      const e = g.entities.find((x) => x.name === d.entityName);
+      e.observations = e.observations.filter((o) => !d.observations.includes(o));
+    }
+    writeGraph(g);
+  }
+  graphCache.mtime = 0;
+  return { ok: true, removed: count, via: r && r.ok ? "memory server" : "memory file" };
+}
+
+// Searches the graph for the words in a question, best matches first, with the
+// relations that touch them.
+function recall(query) {
+  if (!graphMode()) {
+    const q = String(query || "").toLowerCase();
+    const hits = loadFacts().filter((f) => q.split(/\s+/).some((w) => w.length > 2 && f.text.toLowerCase().includes(w)));
+    return { ok: true, facts: hits.map((f) => f.text) };
+  }
+  const words = String(query || "").toLowerCase().match(/[a-z0-9']{3,}/g) || [];
+  const g = readGraph();
+  const scored = g.entities.map((e) => {
+    const name = e.name.toLowerCase(), type = String(e.entityType || "").toLowerCase();
+    let score = 0;
+    const obs = [];
+    for (const o of e.observations) {
+      const low = o.toLowerCase();
+      const n = words.filter((w) => low.includes(w)).length;
+      if (n) { score += n; obs.push(o); }
+    }
+    const nameHit = words.some((w) => name.includes(w) || type.includes(w));
+    if (nameHit) score += 5;
+    return { e, score, obs: nameHit ? e.observations : obs };
+  }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 6);
+  const names = new Set(scored.map((x) => x.e.name));
+  return {
+    ok: true,
+    found: scored.map((x) => ({ name: x.e.name, type: x.e.entityType, observations: x.obs.slice(0, 20) })),
+    relations: g.relations.filter((r) => names.has(r.from) || names.has(r.to)).slice(0, 30),
+  };
 }
 
 let graphCache = { file: "", mtime: 0, text: "" };
 function graphSummary() {
-  const file = settings.useGraph && settings.graphFile;
-  if (!file) return "";
+  if (!graphMode()) return "";
+  const file = settings.graphFile;
   try {
     const st = fs.statSync(file);
     if (graphCache.file === file && graphCache.mtime === st.mtimeMs) return graphCache.text;
-    const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean);
-    const ents = [], rels = [];
-    for (const l of lines) {
-      let o; try { o = JSON.parse(l); } catch (e) { continue; }
-      if (o.type === "entity") ents.push("- " + o.name + " (" + o.entityType + "): " + (o.observations || []).join("; "));
-      else if (o.type === "relation") rels.push("- " + o.from + " " + o.relationType + " " + o.to);
-    }
+    const g = readGraph();
+    // The user first, so a cut-off summary still says who they are.
+    const me = userEntity().toLowerCase();
+    g.entities.sort((a, b) => (b.name.toLowerCase() === me) - (a.name.toLowerCase() === me));
+    const ents = g.entities.map((e) => "- " + e.name + " (" + e.entityType + "): " + e.observations.join("; "));
+    const rels = g.relations.map((r) => "- " + r.from + " " + r.relationType + " " + r.to);
     let text = ents.join("\n") + (rels.length ? "\nRelations:\n" + rels.join("\n") : "");
-    if (text.length > 6000) text = text.slice(0, 6000) + "\n(...)";
+    if (text.length > 8000) text = text.slice(0, 8000) + "\n(more in memory: use recall)";
     graphCache = { file, mtime: st.mtimeMs, text };
     return text;
   } catch (e) { return ""; }
+}
+
+// Facts Jarvis kept before the memory was shared move into the graph once.
+async function migrateFacts() {
+  if (!graphMode()) return;
+  const facts = loadFacts();
+  if (!facts.length) return;
+  for (const f of facts) await remember(f.text);
+  saveFacts([]);
 }
 
 // ------------------------------------------------------------------- tools --
@@ -467,8 +663,52 @@ const TOOLS = [
   },
   {
     name: "remember", where: "server", core: true,
-    description: "Save a fact about the user for future conversations: preferences, people, plans, routines. With forget=true, removes saved facts containing the text instead.",
-    input_schema: { type: "object", properties: { fact: { type: "string" }, forget: { type: "boolean" } }, required: ["fact"] },
+    description: "Save a fact to the shared memory (the same memory the user's other assistant uses), for future conversations: preferences, people, plans, routines. about = who or what it is about (default: the user; use a person's name for facts about them). With forget=true, removes remembered facts containing the text instead.",
+    input_schema: {
+      type: "object",
+      properties: {
+        fact: { type: "string" }, about: { type: "string" },
+        type: { type: "string", description: "for a new entry: Person, Place, Project, Thing..." },
+        forget: { type: "boolean" },
+      },
+      required: ["fact"],
+    },
+  },
+  {
+    name: "recall", where: "server", core: true,
+    description: "Search the shared memory for what is known about someone or something, when it is not already in front of you.",
+    input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  {
+    name: "find_model", where: "server", core: true,
+    description: "Find an AI model to download for the local model server: searches Hugging Face for GGUF builds and lists the files with sizes, marking the one that fits this PC's 16 GB GPU. Shows them on screen. Takes words (\"qwen 3.5 27b\"), a repo id (\"unsloth/Qwen3.5-27B-GGUF\") or a Hugging Face link, and optionally a quant (\"Q4_K_M\").",
+    input_schema: { type: "object", properties: { query: { type: "string" }, quant: { type: "string" } }, required: ["query"] },
+  },
+  {
+    name: "download_model", where: "client", core: true,
+    description: "Download a GGUF model into the local models folder and add it to the model list. Opens the model's page and asks the user to confirm on screen first; nothing downloads without their tap. Give repo and file from find_model, or a direct https link to a .gguf file from any site.",
+    input_schema: {
+      type: "object",
+      properties: { repo: { type: "string" }, file: { type: "string" }, url: { type: "string" } },
+    },
+  },
+  {
+    name: "open_web", where: "client", core: true,
+    description: "Open a web page on the panel, in its Web app.",
+    input_schema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+  },
+  {
+    name: "lights", where: "server", core: true,
+    description: "The user's Govee lights (an RGBIC LED strip). on, off, brightness (level 1-100), color (a name like purple or warm white, or #hex), white (kelvin 2000-9000), status, scene (by name; needs a Govee API key), scan (list them). device = a light's name; empty means all.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["on", "off", "brightness", "color", "white", "status", "scene", "scan"] },
+        device: { type: "string" }, level: { type: "integer" }, color: { type: "string" },
+        kelvin: { type: "integer" }, scene: { type: "string" },
+      },
+      required: ["action"],
+    },
   },
   {
     name: "open_app", where: "client", core: false,
@@ -501,8 +741,8 @@ const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 function claudeTools() {
   return TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
 }
-function openaiTools() {
-  return TOOLS.filter((t) => t.core).map((t) => ({
+function openaiTools(all) {
+  return TOOLS.filter((t) => all || t.core).map((t) => ({
     type: "function",
     function: { name: t.name, description: t.description, parameters: t.input_schema },
   }));
@@ -562,9 +802,28 @@ async function runServerTool(name, input, emit) {
       return m.ok ? ["volume " + cur + " -> " + level] : [m.error || "failed", true];
     }
     case "remember": {
-      const r = a.forget ? forget(a.fact) : remember(a.fact);
+      const r = a.forget ? await forget(a.fact) : await remember(a.fact, a.about, a.type);
       emit({ type: "memory" });
       return [JSON.stringify(r), !r.ok];
+    }
+    case "recall": {
+      const r = recall(a.query);
+      return [JSON.stringify(r)];
+    }
+    case "lights": {
+      const r = await govee.control(a);
+      emit({ type: "lights" });
+      return [JSON.stringify(r), !r.ok];
+    }
+    case "find_model": {
+      const r = await models.find(a.query, a.quant);
+      if (!r.ok) return [r.error, true];
+      emit({ type: "card", card: { kind: "models", query: r.query, items: r.results } });
+      return [JSON.stringify(r.results.map((x) => ({
+        repo: x.repo, downloads: x.downloads, updated: x.updated,
+        recommended: { file: x.best.path, quant: x.best.quant, sizeGB: x.best.sizeGB, fitsGPU: x.best.fits },
+        others: x.others.map((o) => ({ file: o.path, quant: o.quant, sizeGB: o.sizeGB, fitsGPU: o.fits })),
+      }))) + "\nThe options are on screen with Download buttons. To fetch one, call download_model with its repo and file."];
     }
     case "discord": {
       const map = { mute: ["setMute", true], unmute: ["setMute", false], deafen: ["setDeaf", true], undeafen: ["setDeaf", false] };
@@ -611,9 +870,10 @@ async function runServerTool(name, input, emit) {
 // ----------------------------------------------------------- system prompt --
 function who() { return settings.name || "the user"; }
 
-function systemPrompt(forLocal) {
+// `small`: a small local model gets a shorter slice of the memory graph.
+function systemPrompt(small) {
   const addr = settings.addressAs ? "Address them as \"" + settings.addressAs + "\"." : "";
-  const facts = loadFacts();
+  const facts = graphMode() ? [] : loadFacts();
   const graph = graphSummary();
   const parts = [
     "You are Jarvis, " + who() + "'s personal assistant. You live on the small HYTE Y70 Touch screen beside their main monitor, built into their dashboard. " + addr,
@@ -634,11 +894,12 @@ function systemPrompt(forLocal) {
     "- Requests come through speech recognition and may be misheard (\"place on low fi beads\" means \"play some lo-fi beats\"). Interpret them charitably.",
     "- " + who() + " may be in the middle of a game. Be brief.",
     "- Each request starts with a bracketed line of background (the time, what is playing). Use it when it helps; never remark on it otherwise.",
+    "- Your memory is shared with " + who() + "'s other assistant. When they tell you something worth keeping, remember it; to look something up in it, recall.",
+    "- To get a new AI model for the local server: find_model, then download_model with the best fit. The user confirms the download on screen.",
   ];
   if (settings.about) parts.push("", "About " + who() + ":", settings.about);
   if (facts.length) parts.push("", "Things you have been asked to remember:", facts.map((f) => "- " + f.text).join("\n"));
-  if (graph && !forLocal) parts.push("", "What " + who() + "'s memory graph knows (shared with their other assistant):", graph);
-  else if (graph) parts.push("", "From " + who() + "'s memory graph:", graph.slice(0, 2500));
+  if (graph) parts.push("", "What the shared memory knows:", small ? graph.slice(0, 2500) + (graph.length > 2500 ? "\n(more: use recall)" : "") : graph);
   return parts.join("\n");
 }
 
@@ -736,7 +997,9 @@ function toOpenAI(system, messages) {
 async function localStep(conv, emit, signal, noTools) {
   const base = settings.localUrl.replace(/\/+$/, "");
   const model = localModelNow();
-  if (local.loaded !== model) emit({ type: "status", text: "Waking the local model…" });
+  const ini = models.readIni(settings).find((m) => m.id === model);
+  const big = isBig(model, ini && ini.file);
+  if (local.loaded !== model) emit({ type: "status", text: "Waking " + model + "…" });
   let res;
   try {
     res = await fetch(base + "/v1/chat/completions", {
@@ -747,8 +1010,8 @@ async function localStep(conv, emit, signal, noTools) {
         model,
         stream: true,
         max_tokens: 1500,
-        messages: toOpenAI(systemPrompt(true), conv.messages),
-        tools: openaiTools(),
+        messages: toOpenAI(systemPrompt(!big), conv.messages),
+        tools: openaiTools(big),
         tool_choice: noTools ? "none" : "auto",
         chat_template_kwargs: { enable_thinking: false },
       }),
@@ -1045,10 +1308,66 @@ async function handle(req, res, urlPath) {
   }
 
   if (sub === "memory") {
-    if (req.method === "GET") return json(res, 200, { ok: true, facts: loadFacts(), graph: !!graphSummary() });
+    const view = () => (graphMode()
+      ? { mode: "graph", file: settings.graphFile, user: userEntity(), server: memoryServer.up, ...readGraph() }
+      : { mode: "local", facts: loadFacts() });
+    if (req.method === "GET") return json(res, 200, { ok: true, ...view() });
+    return H.readJsonBody(req, res, async (body) => {
+      const r = body.forget ? await forget(body.forget, body.entity) : await remember(body.fact, body.about, body.type);
+      broadcast({ type: "memory" });
+      return json(res, r.ok ? 200 : 400, { ...r, ...view() });
+    });
+  }
+
+  // ---- local models: the list, and fetching new ones ----
+  if (sub === "models" && req.method === "GET") {
+    await localProbe(false);
+    return json(res, 200, { ok: true, models: localModels(), needsRestart: local.needsRestart, downloads: models.list(), dir: models.modelsDir(settings) });
+  }
+  // ---- Govee lights ----
+  if (sub === "lights") {
+    if (req.method === "GET") return json(res, 200, { ok: true, ...govee.status() });
+    return H.readJsonBody(req, res, async (body) => {
+      const r = await govee.control(body || {});
+      return json(res, 200, { ...r, lights: govee.status() });
+    });
+  }
+  if (sub === "lights/key" && req.method === "POST") {
     return H.readJsonBody(req, res, (body) => {
-      const r = body.forget ? forget(body.forget) : remember(body.fact);
-      return json(res, r.ok ? 200 : 400, { ...r, facts: loadFacts() });
+      if (body.clear) govee.writeKey("");
+      else {
+        const k = String(body.key || "").trim();
+        if (!/^[A-Za-z0-9-]{20,80}$/.test(k)) return json(res, 400, { ok: false, error: "That doesn't look like a Govee API key." });
+        govee.writeKey(k);
+      }
+      // Never echoed back, only whether there is one.
+      return json(res, 200, { ok: true, lights: govee.status() });
+    });
+  }
+  if (sub === "models/find" && req.method === "POST") {
+    return H.readJsonBody(req, res, async (body) => {
+      let r;
+      try { r = await models.find(body.query, body.quant); } catch (e) { r = { ok: false, error: e.message }; }
+      return json(res, r.ok ? 200 : 400, r);
+    });
+  }
+  if ((sub === "models/plan" || sub === "models/download") && req.method === "POST") {
+    return H.readJsonBody(req, res, async (body) => {
+      let p;
+      try { p = await models.plan(body || {}, settings); } catch (e) { p = { ok: false, error: e.message }; }
+      if (!p.ok || sub === "models/plan") return json(res, p.ok ? 200 : 400, p);
+      const r = models.start(p, H);
+      broadcast({ type: "status", status: status() });
+      return json(res, r.ok ? 200 : 400, r);
+    });
+  }
+  if (sub === "models/installed" && req.method === "POST") {
+    // Called by the download window when curl is done.
+    return H.readJsonBody(req, res, async (body) => {
+      const r = models.register(String(body.id || ""), settings);
+      await localProbe(true);
+      broadcast({ type: "downloaded", result: r, status: status() });
+      return json(res, r.ok ? 200 : 400, r);
     });
   }
 
@@ -1072,6 +1391,7 @@ async function handle(req, res, urlPath) {
       let r;
       if (body.action === "start") r = localStart();
       else if (body.action === "stop") r = await localStop();
+      else if (body.action === "restart") r = await localRestart();
       else if (body.action === "edit") r = localEdit();
       else r = { ok: false, error: "unknown action" };
       broadcast({ type: "status", status: status() });
@@ -1086,11 +1406,21 @@ async function handle(req, res, urlPath) {
 function init(host) {
   H = host;
   loadSettings();
+  govee.init(H.DATA);
   // The wake word is resident: start the helper with the server when it is on,
   // rather than waiting for the panel to ask.
   if (settings.wake) setTimeout(voiceStart, 1500);
   // Keep the local model's status fresh for the panel without a request.
   setInterval(() => { localProbe(true).then(() => broadcast({ type: "status", status: status() })); }, 15000).unref();
+  // While anything is downloading, the island shows its progress.
+  setInterval(() => {
+    const live = models.list().filter((d) => !d.registered && !d.error);
+    if (live.length) broadcast({ type: "downloads", downloads: models.list() });
+  }, 2000).unref();
+  migrateFacts().catch(() => {});
 }
 
-module.exports = { init, handle, STATE_FILES: ["jarvis.json", "jarvis-memory.json", "jarvis-history.json"] };
+module.exports = {
+  init, handle,
+  STATE_FILES: ["jarvis.json", "jarvis-memory.json", "jarvis-history.json"].concat(govee.STATE_FILES),
+};

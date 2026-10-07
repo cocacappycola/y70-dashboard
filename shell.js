@@ -9,6 +9,9 @@ const APPS = {
   shorts: { title: "Shorts", src: "/app-web.html?site=shorts" },
   tiktok: { title: "TikTok", src: "/app-web.html?site=tiktok" },
   snapchat: { title: "Snapchat", src: "/app-web.html?site=snapchat" },
+  // Any page Jarvis opens for you (a model's Hugging Face page, a link from a
+  // search), in the same kind of native view as the apps above.
+  web: { title: "Web", src: "/app-web.html?site=web" },
 };
 
 const WIDGETS = {
@@ -979,7 +982,7 @@ function isCovered() {
 function syncWebViews() {
   if (!native) return;
   const covered = isCovered();
-  const activeIsWeb = /^(youtube|shorts|tiktok|snapchat)$/.test(state.app);
+  const activeIsWeb = /^(youtube|shorts|tiktok|snapchat|web)$/.test(state.app);
   if (covered || !activeIsWeb) native.webHideAll();
   // When it should be visible the app page re-places it on its own next tick.
 }
