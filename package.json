@@ -1,0 +1,8 @@
+{
+  "name": "y70-dashboard-server",
+  "private": true,
+  "description": "Dependencies of server.js (the Jarvis fork needs the Anthropic SDK). The native shell has its own package.json in v2/.",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0"
+  }
+}

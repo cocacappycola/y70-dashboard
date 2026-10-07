@@ -4,6 +4,143 @@
 > you are doing. Run **[`launch-v2.bat`](launch-v2.bat)**; quit from the tray icon.
 > V1 (the browser build) is still here and still works — it is tagged `v1` in git.
 
+> **This is the Jarvis fork** (`y70-dashboard-assistant`, 3.x): Main plus a
+> voice assistant and a Dynamic-Island-style status bar. Switch between this and
+> Main from **Drawer → Panel** — see [Forks](#forks).
+
+## Jarvis
+
+Say **"Jarvis"** (or tap the orb at the right of the top bar) and ask. He
+answers out loud, puts anything worth seeing on the panel, and can do things:
+
+| Ask | What happens |
+|---|---|
+| "Jarvis, set a timer for ten minutes for the pasta" | A timer in the island; it rings there |
+| "Wake me at 7 on weekdays" | A repeating alarm; the next one shows in the top bar |
+| "Play Radiohead" / "play my gym playlist" / "pause" / "next" | Spotify search-and-play; transport goes to whatever is playing |
+| "What's the weather tomorrow?" | Spoken answer plus a forecast card |
+| "Who won the F1 race?" / "summarise that article" | Web search (and page reading), answered from sources |
+| "Show me a western fence lizard" | Pictures on the panel; tap one to see it big |
+| "Turn it down a bit" / "mute Discord" | System volume / Discord voice |
+| "Remember that…" / "add milk to my notes" | Shared memory / the Notes widget |
+| "Lights purple" / "lights off" / "dim the lights to 30" | Your Govee strip, over the LAN |
+| "Download Qwen 3.5 27B" / "find me a coding model" | Finds GGUF builds on Hugging Face, opens the page, downloads after you tap |
+
+"Jarvis, set a timer for five minutes" works in one breath: the name and the
+request are heard together. If his answer ends in a question, he listens again
+for your reply. Tapping the orb while he talks stops him; holding it opens a
+box to type into instead.
+
+### Setting it up
+
+1. **Brain.** Drawer → Settings → **Jarvis**. Paste an Anthropic API key
+   (console.anthropic.com) for Claude — Haiku 4.5 by default, the fast and cheap
+   one; Sonnet 5.5 and Opus 5.5 are a tap away. The key is written to the data
+   folder and is never shown or served back. **Auto** uses the local model when
+   it is running and Claude when it is not.
+2. **Local model.** `E:\OLLAMAMODEL2026\gguf\jarvis-llm.bat` runs llama-server in
+   router mode on port 8081 with all three: **Qwen3.8 27B** (your chat model,
+   with exactly the settings from `qwen27b-iq4.bat`), **Qwen3.5 9B** and
+   **Qwen3.5 4B**. One is loaded at a time, unloaded after 10 idle minutes so
+   games get the VRAM back. It also starts the MCP memory server and serves the
+   web UI (with the MCP proxy) at http://127.0.0.1:8081, so it replaces
+   `qwen27b-iq4.bat` — run one or the other, never both (the 27B would be in
+   VRAM twice). Start / Stop / Restart / Edit it from Jarvis's settings.
+   Per-model settings, **including GPU layers**, live in `jarvis-models.ini`:
+   a `-ngl` on the bat's command line overrides every model's own value
+   (measured — it turned the 27B's 56 into 99). With *Use the 4B while gaming*
+   on, a game in front switches to the 4B and unloads whatever else is loaded.
+   Big models (14B and up) get every tool and the whole memory; small ones a
+   short list.
+3. **More models.** "Jarvis, download …" (or Settings → Jarvis → *Get a model*)
+   searches Hugging Face for GGUF builds and picks the quant that fits the 16 GB
+   card. Jarvis opens the model's page in the panel's **Web** app with a
+   *Download?* bar above it — nothing downloads until you tap. The download runs
+   in its own cmd window (curl, resumable — run the script again to continue),
+   is checked (size, GGUF header) and added to `jarvis-models.ini` with GPU
+   layers left to llama.cpp's `--fit`. Restart the local server to load it.
+   Only `.gguf` files, only https; a direct link from any site works too.
+   Gated repos (Llama, Gemma's originals) need a Hugging Face login it doesn't
+   have.
+4. **Hearing.** The wake word is recognised offline by Windows' own engine and
+   nothing leaves the PC until you ask something. The request itself goes to
+   **Whisper** (whisper.cpp, `ggml-large-v3-turbo-q5_0`, on the GPU, in
+   `E:\OLLAMAMODEL2026\whisper`): Windows' engine still listens — it knows when
+   you have finished and shows the words as you speak — and the audio it heard
+   goes to `whisper-server` (port 8082, resident, ~600 MB of VRAM) for the words
+   themselves. Measured on the same audio: Windows offline heard "place on low
+   Fi beads on spot if I", Whisper "play some lo-fi beats on Spotify", in 65–80 ms
+   (0.4 s for the first after loading). It is biased toward your vocabulary
+   (Jarvis, Spotify, Govee…) with an initial prompt, and Whisper's known
+   inventions on near-silence ("Thank you.", "[BLANK_AUDIO]") are dropped.
+   The alternatives are Windows' online recognizer (needs **Settings › Privacy &
+   security › Speech › Online speech recognition**) and its offline one.
+   Jarvis listens on Windows' **default recording device**; Settings → Jarvis →
+   Microphone shows which one that is, with a live meter.
+   
+   **Interrupting.** While he talks the mic keeps listening: "Jarvis…" starts a
+   new request and "stop" / "that's enough" / "never mind" ends the answer. The
+   helper is told the sentence he is saying, so his own voice through speakers
+   cannot trip either (a "stop" inside his own sentence is ignored, as is him
+   saying his name). *Interrupt by just talking* (off by default; for
+   headphones) stops him on any speech that is not an echo of his sentence.
+   Tapping the orb always stops him.
+5. **Voice.** **Kokoro-82M** (`tts-kokoro.py`, kokoro-onnx, in
+   `E:\OLLAMAMODEL2026\tts`), resident and on the CPU so it takes no VRAM: about
+   0.5 s a sentence, and the panel asks for the next sentence while the current
+   one plays. 28 English voices; the British men (George — the default —
+   Lewis, Daniel, Fable) suit a Jarvis, and British voices get British
+   pronunciation. Needs `pip install kokoro-onnx` plus `kokoro-v1.0.onnx` and
+   `voices-v1.0.bin`. The Windows voices are the fallback whenever Kokoro is
+   missing or fails.
+6. **About you / memory.** Name, what to call you, free text, home for the
+   weather. Memory is **one memory shared with the web UI**: the MCP memory
+   server's knowledge graph (`E:\OLLAMAMODEL2026\memory.json`). Jarvis writes
+   through that server when it is running (it is the one writer, as for the web
+   UI) and edits the file in the same format when it is not — the server
+   re-reads the file on every request, so nothing is lost. Reads go straight to
+   the file; the server takes ~1.4 s a call. "Remember Jake plays bass" files it
+   under Jake; the settings list every entity and fact, each deletable. All of it
+   goes into each request to whichever brain answers.
+7. **Lights.** Govee Desktop has **no API** another program can use — it listens
+   on no port and opens no pipe (checked, v2.40.60). The workaround is Govee's
+   own **LAN API**, the one Govee Desktop and Home Assistant use: UDP to the
+   light, no account, no key, Govee Desktop keeps working alongside. Names come
+   from Govee Desktop's device list. Govee Desktop holds UDP 4002 (where lights
+   answer) exclusively, so Jarvis binds the LAN address's 4002 instead, which
+   Windows allows, and falls back to the light's MAC in the ARP table. Because
+   UDP has no receipt, a light not heard from for 5 minutes must answer a ping
+   before Jarvis says it did anything. *LAN Control* must be on for the light
+   in the Govee Home app. A Govee API key (Govee Home → Profile → Settings →
+   Apply for API Key) adds scenes and control away from the LAN.
+
+### How it works
+
+- `voice/` — **y70-voice.exe** (C#, .NET 8): SAPI listens for the name all day
+  (grammar: the name, optionally followed by dictation, against a full dictation
+  "garbage" grammar so ordinary speech does not match); the WinRT recognizer
+  hears requests online, SAPI dictation offline; WinRT synthesises speech; and a
+  foreground-fullscreen probe reports games. Rebuild with
+  `cd voice && dotnet publish -c Release -o bin/out`.
+- `assistant.js` — the loop. Conversations are stored as Claude content blocks
+  and translated for llama-server's OpenAI endpoint, so either brain can pick a
+  conversation up. Tools that touch the PC run on the server (search, weather,
+  volume, Discord, notes, memory); tools that touch the panel (timers, alarms,
+  music, showing cards, opening apps) are handed to the panel, which runs them
+  and posts the results back. The local model gets the ten core tools — small
+  models choose far more reliably from a short list. Two web searches per
+  question at most, and the last step runs with tools off, so every turn ends
+  in an answer.
+- `assistant-web.js` + `search-ddgs.py` — key-less search. The `ddgs` Python
+  library goes first when it is installed: it impersonates a real browser, and
+  every plain scripted request gets challenged (DuckDuckGo) or fed junk (Bing
+  matched only the first word of "how tall is mount bachelor"). Fallbacks: Bing
+  News RSS for current events, Bing, DuckDuckGo, Wikipedia — and every result
+  must mention most of the question's key words to be kept.
+- `jarvis.js` / `jarvis.css` — the status bar, the island, alarms and timers,
+  Jarvis's card and settings. Timers are stored exactly as the Timer widget
+  stores them, so the two stay in step; the island does the ringing.
+
 ## V2: a window that doesn't steal focus
 
 In V1 the dashboard was a Brave window. Every tap **activated** that window:
@@ -771,7 +908,15 @@ wscript "autostart-hidden.vbs" 0
 | File | Purpose |
 |------|---------|
 | `config.js`  | Your Client ID + settings |
-| `server.js`  | Zero-dependency static server on `127.0.0.1:8888` |
+| `server.js`  | Static server + APIs on `127.0.0.1:8888` (the Jarvis fork adds the Anthropic SDK: `npm install` at the root) |
+| `assistant.js` | Jarvis: settings, the voice helper, both brains, tools, conversations |
+| `assistant-web.js` | Jarvis's key-less search, images, page reading, weather |
+| `search-ddgs.py` | Search through the `ddgs` Python library when it is installed |
+| `assistant-models.js` | Local models: Hugging Face search, confirmed downloads, adding to the preset |
+| `govee.js` | Govee lights over the LAN API (and the cloud API, with a key) |
+| `tts-kokoro.py` | Jarvis's voice: Kokoro-82M, resident, one WAV per sentence |
+| `jarvis.js` / `jarvis.css` | Status bar, the island, alarms + timers, Jarvis's card and settings |
+| `voice/Program.cs` | Voice helper — wake word, online/offline dictation, voices, game probe |
 | `index.html` | UI layout |
 | `styles.css` | Touch/dark styling tuned for the tall Y70 display |
 | `app.js`     | Auth, Web Playback SDK, API calls, rendering |
@@ -784,6 +929,7 @@ wscript "autostart-hidden.vbs" 0
 | `discord-app.json` | Your Discord client id + secret (never served) |
 | `v2/main.js` | V2 native shell — the non-activating window |
 | `v2/preload.js` | Bridge exposing keyboard mode to the pages |
+| `v2/forks.js` | The forks the drawer can switch between |
 | `launch-v2.bat` | Starts V2 (prefers the built app) |
 | `v2/build/icon.ico` | App icon, generated by a script rather than shipped as a blob |
 | `notes.txt` | The notes widget's store (never served over HTTP) |

@@ -1268,7 +1268,58 @@ window.addEventListener("message", (e) => {
   else if (d.action === "next") playNext();
   else if (d.action === "prev") playPrev();
   else if (d.action === "seek" && currentDuration) seekTo(Math.floor(d.ratio * currentDuration));
+  else if (d.action === "search_play") {
+    // Jarvis asking for something by name. The answer goes back to whoever
+    // asked, so it can say what actually started playing.
+    searchAndPlay(d.query, d.kind).then(
+      (r) => { try { e.source.postMessage({ type: "y70:cmd-reply", id: d.id, ...r }, "*"); } catch (err) {} },
+      (err) => { try { e.source.postMessage({ type: "y70:cmd-reply", id: d.id, ok: false, text: "Spotify: " + err.message }, "*"); } catch (e2) {} });
+  }
 });
+
+// Finds something on Spotify by name and plays it. "Liked songs" means the
+// library; a playlist is looked for among your own first, because "play my
+// gym playlist" means yours, not the most popular one with that name.
+async function searchAndPlay(query, kind) {
+  const q = String(query || "").trim();
+  if (!q) return { ok: false, text: "Nothing to search for." };
+  if (!connected) return { ok: false, text: "Spotify isn't signed in on the panel." };
+  if (/^(my )?(liked|saved|favou?rite)( songs| tracks)?$/i.test(q)) {
+    await playLiked(0);
+    return { ok: true, text: "Playing your Liked Songs." };
+  }
+  const words = (s) => String(s).toLowerCase().replace(/\bplaylist\b|\bmy\b/g, "").trim();
+  if (!kind || kind === "playlist") {
+    try {
+      const mine = await api("/me/playlists?limit=50");
+      const want = words(q);
+      const hit = (mine.items || []).filter(Boolean).find((p) => words(p.name) === want) ||
+        (mine.items || []).filter(Boolean).find((p) => want && words(p.name).includes(want));
+      if (hit) {
+        await playContext(hit.uri, null, hit.name);
+        return { ok: true, text: "Playing your playlist " + hit.name + "." };
+      }
+    } catch (e) { /* fall through to a public search */ }
+  }
+  const type = ["track", "album", "artist", "playlist"].includes(kind) ? kind : "track";
+  const data = await api("/search?type=" + type + "&limit=5&q=" + encodeURIComponent(q));
+  // Playlist search returns null entries for playlists it cannot show.
+  const items = ((data[type + "s"] || {}).items || []).filter(Boolean);
+  if (!items.length) return { ok: false, text: "Nothing on Spotify for “" + q + "”." };
+  const it = items[0];
+  const by = it.artists && it.artists.length ? " by " + it.artists.map((a) => a.name).join(", ") : "";
+  if (type === "track") {
+    await playerCmd("/me/player/play", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uris: [it.uri] }),
+    });
+    setTimeout(refreshQueue, 600);
+  } else {
+    await playContext(it.uri, null, it.name);
+  }
+  return { ok: true, text: "Playing " + it.name + by + (type !== "track" ? " (" + type + ")" : "") + "." };
+}
 
 // ---- Media Session ---------------------------------------------------------
 // Lets hardware media keys, headphone buttons, and macro pads that emit media

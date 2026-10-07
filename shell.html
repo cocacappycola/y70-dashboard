@@ -7,15 +7,28 @@
   <script src="theme.js"></script>
   <link rel="stylesheet" href="ui.css" />
   <link rel="stylesheet" href="shell.css" />
+  <link rel="stylesheet" href="jarvis.css" />
 </head>
 <body>
   <div id="shell">
 
-    <!-- Pull-down bar -->
+    <!-- Pull-down bar, and the status bar: clock, the island, the alarm, Jarvis -->
     <div id="topbar">
+      <div class="sb-side sb-left"><span id="sb-clock"></span></div>
       <div class="grip"></div>
+      <div id="island" aria-live="polite"></div>
+      <div class="sb-side sb-right">
+        <span id="sb-alarm" hidden></span>
+        <button id="jv-btn" aria-label="Ask Jarvis"><span class="jv-orb"></span></button>
+      </div>
       <div id="kb-banner">keyboard mode — this window has focus</div>
     </div>
+
+    <!-- The island, opened: Jarvis's answers, timers, alarms, a ringing alarm.
+         Filled by jarvis.js. The glow traces the screen edge while Jarvis is up. -->
+    <div id="island-backdrop" class="hidden"></div>
+    <div id="island-card" aria-live="polite"></div>
+    <div id="jv-glow"></div>
 
     <!-- Incoming call. Drops from the top over everything, and leaves the same
          way when the call ends. -->
@@ -84,6 +97,10 @@
             <span class="tile-ico web-ico">👻</span>
             <span>Snapchat</span>
           </button>
+          <button class="tile app-tile" data-app="web">
+            <span class="tile-ico web-ico">🌐</span>
+            <span>Web</span>
+          </button>
         </div>
         <div class="sec-title">Pull-up widgets<span class="sec-hint">drag ☰ to reorder · tap to toggle</span></div>
         <div id="widget-list"></div>
@@ -118,6 +135,11 @@
             <span class="tile-ico trim-ico">⚙</span>
             <span>Appearance</span>
             <span class="tile-sub" id="theme-name"></span>
+          </button>
+          <button class="tile" id="open-jarvis">
+            <span class="tile-ico jarvis-ico"><span class="jv-orb"></span></span>
+            <span>Jarvis</span>
+            <span class="tile-sub" id="jarvis-sub"></span>
           </button>
         </div>
         <div id="drawer-close"><span class="grip"></span></div>
@@ -174,6 +196,18 @@
 
         <div id="settings-close"><span class="grip"></span></div>
       </div>
+
+      <!-- ---- Jarvis settings (swaps in over the drawer). Built by jarvis.js. ---- -->
+      <div class="settings-inner hidden" id="jarvis-view">
+        <div class="set-head">
+          <button class="btn btn--quiet btn--icon set-back" id="jarvis-back" aria-label="Back">‹</button>
+          <div class="set-title">Jarvis</div>
+          <div class="panel-spacer"></div>
+          <span class="sec-hint" id="jarvis-saved"></span>
+        </div>
+        <div class="set-scroll scroll-y" id="jarvis-form"></div>
+        <div id="jarvis-close"><span class="grip"></span></div>
+      </div>
     </div>
 
     <!-- App area. Apps are kept mounted and toggled, never torn down, so audio
@@ -185,5 +219,6 @@
   </div>
 
   <script src="shell.js"></script>
+  <script src="jarvis.js"></script>
 </body>
 </html>
