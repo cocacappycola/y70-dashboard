@@ -35,6 +35,9 @@ def to_wav(samples, rate):
 
 
 def main():
+    # A pipe is read as cp1252 on Windows; the dashboard sends UTF-8 (and
+    # escapes everything past ASCII as well).
+    sys.stdin.reconfigure(encoding="utf-8")
     model, voices_file = sys.argv[1], sys.argv[2]
     try:
         from kokoro_onnx import Kokoro

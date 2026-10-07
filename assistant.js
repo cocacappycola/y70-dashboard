@@ -443,13 +443,25 @@ async function kokoroSpeak(text) {
     const timer = setTimeout(() => { kokoro.waiters.delete(id); resolve({ error: "timed out" }); }, 20000);
     kokoro.waiters.set(id, (m) => { clearTimeout(timer); resolve(m); });
     try {
-      kokoro.proc.stdin.write(JSON.stringify({ id, text: String(text).slice(0, 2000), voice: settings.kokoroVoice, speed: settings.rate }) + "\n");
+      // Python reads a pipe as cp1252 on Windows, so nothing but ASCII goes
+      // down it: a curly ’ arrived as "â€™" and Kokoro said "euro trademark".
+      const line = JSON.stringify({ id, text: String(text).slice(0, 2000), voice: settings.kokoroVoice, speed: settings.rate })
+        .replace(/[\u007f-￿]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+      kokoro.proc.stdin.write(line + "\n");
     } catch (e) { kokoro.waiters.delete(id); clearTimeout(timer); resolve({ error: e.message }); }
   });
 }
 
+// Typographic punctuation, plain: both engines say ' and " best.
+function speechText(t) {
+  return String(t || "")
+    .replace(/[‘’ʼ′]/g, "'").replace(/[“”″]/g, '"')
+    .replace(/…/g, "...").replace(/\s*[–—]\s*/g, ", ").replace(/ /g, " ");
+}
+
 // Kokoro when it is the engine and it works; a Windows voice otherwise.
 async function speak(text) {
+  text = speechText(text);
   if (ttsEngine() === "kokoro") {
     const r = await kokoroSpeak(text);
     if (r && r.data) return r;
@@ -1604,15 +1616,18 @@ async function handle(req, res, urlPath) {
     });
   }
   if (sub === "lights/key" && req.method === "POST") {
-    return H.readJsonBody(req, res, (body) => {
+    return H.readJsonBody(req, res, async (body) => {
+      let count = null;
       if (body.clear) govee.writeKey("");
       else {
         const k = String(body.key || "").trim();
         if (!/^[A-Za-z0-9-]{20,80}$/.test(k)) return json(res, 400, { ok: false, error: "That doesn't look like a Govee API key." });
-        govee.writeKey(k);
+        const r = await govee.saveKey(k);   // checked with Govee before it is kept
+        if (!r.ok) return json(res, 200, { ok: false, error: r.error, lights: govee.status() });
+        count = r.count;
       }
       // Never echoed back, only whether there is one.
-      return json(res, 200, { ok: true, lights: govee.status() });
+      return json(res, 200, { ok: true, count, lights: govee.status() });
     });
   }
   if (sub === "models/find" && req.method === "POST") {

@@ -1587,16 +1587,20 @@
       ? "Kokoro runs on the CPU, so it takes no VRAM from games or the local models. George, Lewis, Daniel and Fable suit a Jarvis."
       : "More voices: Windows Settings › Time & language › Speech › Add voices (an en-GB voice suits a Jarvis)."));
 
-    // ---- Lights (Govee, over the LAN API)
+    // ---- Lights (Govee: LAN API straight to the light, or Govee's cloud)
     const li = st.lights || { devices: [] };
     f.appendChild(label("Lights", "Govee · say “Jarvis, lights purple”"));
     if (!li.devices.length) {
       f.appendChild(status(li.desktop ? "Govee Desktop lists no lights." : "No Govee lights found. Govee Desktop's device list is where Jarvis learns their names.", "warn"));
     }
+    const route = (d) => d.lan === "yes" ? "LAN · " + d.ip
+      : li.hasKey && d.cloud ? "Govee cloud" + (d.lan === "no" ? " (no LAN)" : "")
+      : d.lan === "no" ? "Wi-Fi only · needs the key below"
+      : d.ip ? "found at " + d.ip : "not found yet";
     for (const d of li.devices) {
       const row = el("div", "jf-mic");
       row.appendChild(el("span", "nm", d.name + " · " + d.sku));
-      row.appendChild(el("span", "badge", d.ip ? "on the network · " + d.ip : "not on the network"));
+      row.appendChild(el("span", "badge", route(d)));
       for (const [act, txt] of [["on", "On"], ["off", "Off"]]) {
         const b = el("button", "btn btn--ghost btn--sm", txt);
         b.addEventListener("pointerup", async () => {
@@ -1623,21 +1627,23 @@
     });
     lr2.appendChild(scanB);
     f.appendChild(lr2);
-    f.appendChild(status("Control goes straight to the lights over your network (LAN Control must be on for them in the Govee Home app). Govee Desktop keeps working alongside."));
+    f.appendChild(status("Lights with LAN Control get commands straight over your network. Wi-Fi-only lights (no LAN Control) go through Govee's cloud, which needs a Govee API key. Govee Desktop keeps working alongside."));
     if (li.hasKey) {
       const kr = el("div", "jf-row");
-      kr.appendChild(status("Govee API key saved: scenes and control away from the LAN work.", "good"));
+      kr.appendChild(status("Govee API key saved: Wi-Fi-only lights and scenes work.", "good"));
       const rm = el("button", "btn btn--ghost btn--sm", "Remove key");
       rm.addEventListener("pointerup", async () => { const r = await post("lights/key", { clear: true }); if (r.lights && JST) JST.lights = r.lights; renderForm(); });
       kr.appendChild(rm);
       f.appendChild(kr);
     } else {
-      f.appendChild(textRow("", "Optional: Govee API key, for scenes", "Save key", async (v, inp) => {
-        const r = await post("lights/key", { key: v });
+      const needs = li.devices.some((d) => d.lan !== "yes");
+      f.appendChild(textRow("", needs ? "Govee API key" : "Optional: Govee API key, for scenes", "Save key", async (v, inp) => {
+        const r = await post("lights/key", { key: v });   // the server checks it with Govee first
         if (r.ok) { inp.value = ""; inp.blur(); if (JST) JST.lights = r.lights; renderForm(); }
-        else { const s = status(r.error, "bad"); inp.parentNode.after(s); setTimeout(() => s.remove(), 5000); }
+        else { const s = status(r.error, "bad"); inp.parentNode.after(s); setTimeout(() => s.remove(), 8000); }
       }, "password"));
-      f.appendChild(status("Get one free in the Govee Home app: Profile › Settings › Apply for API Key. Without it everything but scenes still works."));
+      f.appendChild(status("Get one free in the Govee Home app: Profile › Settings (gear) › Apply for API Key. Govee emails it within minutes."
+        + (needs ? "" : " Your lights all answer on LAN, so without it everything but scenes works.")));
     }
 
     // ---- About you
